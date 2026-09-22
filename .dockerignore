@@ -1,0 +1,23 @@
+# Ignore node modules from all projects
+node_modules
+npm-debug.log
+yarn.lock
+package-lock.json
+
+# Ignore logs
+logs
+*.log
+
+# Ignore environment variables
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Ignore Docker-related files that shouldn't be copied
+docker-compose.override.yml
+.dockerignore
+.git
+
+.venv

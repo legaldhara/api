@@ -1,0 +1,336 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String              @id @default(uuid()) @db.Uuid
+  uid             String?             @unique
+  fullName        String
+  email           String              @unique
+  phone           String              @unique
+  password        String?
+  dob             DateTime?
+  gender          String?
+  city            String?
+  isActive        Boolean             @default(false)
+  role            Role                @default(USER)
+  termsAccepted   Boolean             @default(false)
+  termsAcceptedAt DateTime?
+  emailVerified   Boolean             @default(false)
+  lastLogin       DateTime?
+  loginAttempts   Int                 @default(0)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  applications    Application[]
+  updates         ApplicationUpdate[] @relation("UserUpdates")
+  tokens          Token[]
+  query           UserQuery[]
+  payments        Payment[]       
+  documents       Document[]          @relation("UserDocuments")
+  certificateRequests CertificateRequest[]   @relation("UserCertificateRequests")
+  certificateUpdates  CertificateUpdate[]    @relation("UserCertificateUpdates")
+  userPlans           UserPlan[]           // ✅ New relation
+}
+
+model Token {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  token     String    @unique
+  type      TokenType
+  role      Role
+  expiredAt DateTime
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Service {
+  id                String        @id @default(uuid()) @db.Uuid
+  name              String
+  note              String?
+  description       String?
+  isActive          Boolean       @default(true)
+  createdAt         DateTime      @default(now())
+  price             Decimal
+  benifits          String?
+  deliverables      String[]
+  docRequired       String[]
+  governmentCharges Decimal      @default(0)
+  premiumPrice      Decimal       @default(0)
+
+  applications      Application[]
+  payments          Payment[]     @relation("ServicePayments")
+}
+
+model Application {
+  id                String              @id @default(uuid()) @db.Uuid
+  ticketNo          String              @unique
+  userId            String              @db.Uuid
+  serviceId         String              @db.Uuid
+  applicationStatus ApplicationStatus   @default(AWAITING_ACTION)
+  objectionReason   String?
+  createdAt         DateTime            @default(now())
+  autoCloseAt       DateTime?
+  businessName      String?
+  serviceFor        String?
+  serviceName       String?
+  service           Service             @relation(fields: [serviceId], references: [id])
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updates           ApplicationUpdate[]
+  payments          Payment[]
+}
+
+model ApplicationUpdate {
+  id                String            @id @default(uuid()) @db.Uuid
+  applicationId     String            @db.Uuid
+  updaterBy         String            @db.Uuid
+  message           String?
+  createdAt         DateTime          @default(now())
+  updateCharges     Decimal?
+  meta              Json?
+  newStatus         ApplicationStatus
+  paymentId         String?
+  prevStatus        ApplicationStatus
+  pendingPayment    Boolean           @default(false) // ✅ indicates admin requested payment
+  pendingDocs       Boolean           @default(false) // ✅ indicates user must update docs
+  type              PaymentType?
+  UpdateType        UpdateType?
+  application       Application       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  updater           User              @relation("UserUpdates", fields: [updaterBy], references: [id], onDelete: Cascade)
+}
+
+model UserQuery {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  subject    String
+  message    String
+  isResolved Boolean   @default(false)
+  response   String?
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  queryNo    String    @unique
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PaymentMethod {
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+model Payment {
+  id                     String        @id @default(uuid()) @db.Uuid
+  userId                 String?       @db.Uuid
+  applicationId          String?       @db.Uuid
+  serviceId              String?       @db.Uuid
+  certificateRequestId   String?       @db.Uuid
+  planId                 String?       @db.Uuid 
+
+  paymentMethod          String
+  amount                 Decimal
+  paymentGatewayResponse Json?
+  purpose                String
+  paymentType            PaymentType?
+  status                 PaymentStatus @default(PENDING)
+  transactionId          String        @unique
+  parentTransactionId    String?       @db.Uuid
+  paymentDate            DateTime      @default(now())
+  expiresAt              DateTime?
+  parentTransaction      Payment?      @relation("RefundRelation", fields: [parentTransactionId], references: [id])
+  refunds                Payment[]     @relation("RefundRelation")
+  
+  certificateRequest     CertificateRequest?    @relation("CertificatePayments", fields: [certificateRequestId], references: [id], onDelete: Cascade)
+  application            Application?           @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  plan                   Plan?                  @relation("PlanPayments", fields: [planId], references: [id], onDelete: Cascade)
+  service                Service?               @relation("ServicePayments", fields: [serviceId], references: [id])
+  user                   User?                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userPlan               UserPlan[]             // ✅ Optional reverse relation
+}
+
+model Plan {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  price       Decimal
+  subscribe   Boolean   @default(false)
+  duration    Int       // e.g., in days or months
+  benefits    String[]
+  createdAt   DateTime  @default(now())
+  payments    Payment[]   @relation("PlanPayments")
+  userPlans   UserPlan[]  // ✅ New relation
+}
+
+
+model UserPlan {
+  id          String      @id @default(uuid()) @db.Uuid
+  userId      String      @db.Uuid
+  planId      String      @db.Uuid
+  paymentId   String?     @db.Uuid
+  startDate   DateTime    @default(now())
+  endDate     DateTime
+  isActive    Boolean     @default(true)
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan        Plan        @relation(fields: [planId], references: [id], onDelete: Cascade)
+  payment     Payment?    @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+}
+
+model Notification {
+  id               String             @id @default(uuid()) @db.Uuid
+  title            String
+  body             String
+  role             Role
+  audienceType     AudienceType
+  notificationType String             @default("general")
+  clickAction      String             @default("")
+  createdAt        DateTime           @default(now())
+  reads            NotificationRead[]
+}
+
+model NotificationRead {
+  id             String       @id @default(uuid()) @db.Uuid
+  notificationId String       @db.Uuid
+  userId         String       @db.Uuid
+  isRead         Boolean      @default(false)
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+}
+
+model Document {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?
+  url         String
+  publicId    String
+  userId      String   @db.Uuid
+  user        User     @relation("UserDocuments", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+
+model CertificateRequest {
+  id             String                   @id @default(uuid()) @db.Uuid
+  requestNo      String                   @unique
+  userId         String                   @db.Uuid
+  subject        String                   // e.g., "Need Certificate for Rent Agreement"
+  description    String?                  // extra details by user
+  status         CertificateRequestStatus @default(PENDING)
+  pendingPayment Boolean                  @default(false)
+  docRequired    Boolean                  @default(false)
+  isResolved     Boolean                  @default(false)
+  createdAt      DateTime                 @default(now())
+  resolvedAt     DateTime?
+  user           User                     @relation("UserCertificateRequests", fields: [userId], references: [id], onDelete: Cascade)
+  updates        CertificateUpdate[]      // All messages & admin updates
+  payments       Payment[]                @relation("CertificatePayments")
+}
+
+model CertificateUpdate {
+  id                    String              @id @default(uuid()) @db.Uuid
+  certificateRequestId  String              @db.Uuid
+  updatedBy             String              @db.Uuid
+  chargesRequired       Decimal?
+  message               String?
+  transactionId         String?             @unique
+  attachmentUrl         String?             // Admin can attach the certificate file
+  attachmentPublicId    String?             // For cloud storage (like Cloudinary)
+  newStatus             CertificateRequestStatus?
+  paymentId             String?
+  prevStatus            CertificateRequestStatus?
+  createdAt             DateTime            @default(now())
+  updateType            CertificateUpdateType
+  certificateRequest    CertificateRequest  @relation(fields: [certificateRequestId], references: [id], onDelete: Cascade)
+  updater               User                @relation("UserCertificateUpdates", fields: [updatedBy], references: [id], onDelete: Cascade)
+}
+
+
+enum Role {
+  ADMIN
+  COADMIN
+  USER
+}
+
+enum TokenType {
+  REFRESH
+  FCM
+  OTHER
+}
+
+enum CertificateRequestStatus {
+  PENDING       // User requested
+  PAYMENT_REQUIRED
+  UNDER_REVIEW  // Admin reviewing
+  APPROVED      // Admin approved, waiting for upload
+  REJECTED      // Admin rejected
+  COMPLETED     // Certificate provided
+  CLOSED
+}
+
+
+
+enum CertificateUpdateType {
+  USER_MESSAGE        // User sent message or clarification
+  ADMIN_MESSAGE       // Admin replied
+  CERTIFICATE_PROVIDED // Admin uploaded certificate
+  STATUS_CHANGE        // Status updated (like approved/rejected)
+  SYSTEM_GENERATED
+  PAYMENT_FAILED
+  PAYMENT_SUCCESS
+  PAYMENT_REQUESTED
+}
+
+
+
+enum PaymentType {
+  INITIAL
+  OBJECTION
+  ADDITIONAL
+  CORRECTION
+}
+
+
+enum ApplicationStatus { 
+  AWAITING_ACTION
+  PAYMENT_REQUIRED
+  PAYMENT_DONE
+  DATA_REQUIRED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  COMPLETED
+  CLOSED
+}
+
+
+enum UpdateType {
+  USER_MESSAGE
+  ADMIN_MESSAGE
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  STATUS_CHANGE
+  DOCUMENT_UPDATED
+  PAYMENT_REQUESTED
+  SYSTEM_GENERATED
+}
+
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
+}
+
+enum AudienceType {
+  ALL
+  SPECIFIC
+  ROLE_BASED
+}
