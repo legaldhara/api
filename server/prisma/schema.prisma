@@ -12,8 +12,7 @@ model User {
   uid             String?             @unique
   fullName        String
   email           String              @unique
-  phone           String              @unique
-  password        String?
+  phone           String?             @unique
   dob             DateTime?
   gender          String?
   city            String?
@@ -22,6 +21,7 @@ model User {
   termsAccepted   Boolean             @default(false)
   termsAcceptedAt DateTime?
   emailVerified   Boolean             @default(false)
+  phoneVerifiedAt DateTime?
   lastLogin       DateTime?
   loginAttempts   Int                 @default(0)
   createdAt       DateTime            @default(now())
@@ -30,13 +30,98 @@ model User {
   updates         ApplicationUpdate[] @relation("UserUpdates")
   tokens          Token[]
   query           UserQuery[]
-  payments        Payment[]       
+  paymentCharges  PaymentCharge[]
+  refundRequests  PaymentRefund[]       @relation("PaymentRefundRequestedBy")
   documents       Document[]          @relation("UserDocuments")
   certificateRequests CertificateRequest[]   @relation("UserCertificateRequests")
   certificateUpdates  CertificateUpdate[]    @relation("UserCertificateUpdates")
-  userPlans           UserPlan[]           // ✅ New relation
+  userPlans           UserPlan[]           // âœ… New relation
+  adminSecurity       AdminSecurity?
+  uploadedAssets      UploadedAsset[]
+  adminInvitation     AdminInvitation?
 }
 
+model AdminSecurity {
+  id                   String   @id @default(uuid()) @db.Uuid
+  userId               String   @unique @db.Uuid
+  encryptedTotpSecret  String
+  enabledAt            DateTime?
+  recoveryCodeHashes   String[]
+  lastAcceptedTimeStep BigInt?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model OtpChallenge {
+  id             String      @id @default(uuid()) @db.Uuid
+  purpose        OtpPurpose
+  phoneHash      String
+  encryptedPhone String
+  codeDigest     String
+  expiresAt      DateTime
+  resendAt       DateTime
+  attempts       Int         @default(0)
+  maxAttempts    Int         @default(5)
+  consumedAt     DateTime?
+  invalidatedAt  DateTime?
+  verifiedUid    String?
+  verifiedAt     DateTime?
+  requestIpHash  String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([phoneHash, purpose, createdAt])
+  @@index([requestIpHash, createdAt])
+  @@index([expiresAt])
+}
+model RateLimitBucket {
+  id          String   @id @default(uuid()) @db.Uuid
+  scope       String
+  keyHash     String
+  windowStart DateTime
+  count       Int      @default(1)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([scope, keyHash, windowStart])
+  @@index([expiresAt])
+}
+
+
+model UploadedAsset {
+  id           String        @id @default(uuid()) @db.Uuid
+  ownerId      String        @db.Uuid
+  publicId     String        @unique
+  secureUrl    String
+  resourceType String
+  mimeType     String
+  originalName String
+  sizeBytes    Int
+  status       AssetStatus   @default(TEMPORARY)
+  context      AssetContext?
+  referenceId  String?
+  attachedAt   DateTime?
+  deletedAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  owner        User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, status])
+  @@index([context, referenceId])
+}
+
+model AdminInvitation {
+  id             String                   @id @default(uuid()) @db.Uuid
+  userId         String                   @unique @db.Uuid
+  deliveryStatus InvitationDeliveryStatus
+  lastSentAt     DateTime?
+  lastErrorAt    DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  user           User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
 model Token {
   id        String    @id @default(uuid()) @db.Uuid
   userId    String    @db.Uuid
@@ -64,7 +149,6 @@ model Service {
   premiumPrice      Decimal       @default(0)
 
   applications      Application[]
-  payments          Payment[]     @relation("ServicePayments")
 }
 
 model Application {
@@ -79,10 +163,11 @@ model Application {
   businessName      String?
   serviceFor        String?
   serviceName       String?
+  deletedAt         DateTime?
   service           Service             @relation(fields: [serviceId], references: [id])
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   updates           ApplicationUpdate[]
-  payments          Payment[]
+  paymentCharges    PaymentCharge[]
 }
 
 model ApplicationUpdate {
@@ -96,12 +181,13 @@ model ApplicationUpdate {
   newStatus         ApplicationStatus
   paymentId         String?
   prevStatus        ApplicationStatus
-  pendingPayment    Boolean           @default(false) // ✅ indicates admin requested payment
-  pendingDocs       Boolean           @default(false) // ✅ indicates user must update docs
+  pendingPayment    Boolean           @default(false) // âœ… indicates admin requested payment
+  pendingDocs       Boolean           @default(false) // âœ… indicates user must update docs
   type              PaymentType?
   UpdateType        UpdateType?
   application       Application       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   updater           User              @relation("UserUpdates", fields: [updaterBy], references: [id], onDelete: Cascade)
+  sourcePaymentCharge PaymentCharge?
 }
 
 model UserQuery {
@@ -126,33 +212,115 @@ model PaymentMethod {
   updatedAt DateTime @default(now()) @updatedAt
 }
 
-model Payment {
-  id                     String        @id @default(uuid()) @db.Uuid
-  userId                 String?       @db.Uuid
-  applicationId          String?       @db.Uuid
-  serviceId              String?       @db.Uuid
-  certificateRequestId   String?       @db.Uuid
-  planId                 String?       @db.Uuid 
+model PaymentCharge {
+  id                        String              @id @default(uuid()) @db.Uuid
+  userId                    String              @db.Uuid
+  targetType                PaymentTargetType
+  applicationId             String?             @db.Uuid
+  certificateRequestId      String?             @db.Uuid
+  planId                    String?             @db.Uuid
+  sourceApplicationUpdateId String?             @unique @db.Uuid
+  sourceCertificateUpdateId String?             @unique @db.Uuid
+  category                  PaymentCategory
+  amountMinor               Int
+  currency                  String              @default("INR")
+  purpose                   String
+  status                    PaymentChargeStatus @default(OPEN)
+  paidAttemptId             String?             @unique @db.Uuid
+  paidAt                    DateTime?
+  refundedAt                DateTime?
+  cancelledAt               DateTime?
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
+  user                      User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  application               Application?        @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  certificateRequest        CertificateRequest? @relation(fields: [certificateRequestId], references: [id], onDelete: Restrict)
+  plan                      Plan?               @relation(fields: [planId], references: [id], onDelete: Restrict)
+  sourceApplicationUpdate   ApplicationUpdate?  @relation(fields: [sourceApplicationUpdateId], references: [id], onDelete: Restrict)
+  sourceCertificateUpdate   CertificateUpdate?  @relation(fields: [sourceCertificateUpdateId], references: [id], onDelete: Restrict)
+  attempts                  PaymentAttempt[]    @relation("ChargeAttempts")
+  paidAttempt               PaymentAttempt?     @relation("PaidAttempt", fields: [paidAttemptId], references: [id], onDelete: Restrict)
+  refunds                   PaymentRefund[]
 
-  paymentMethod          String
-  amount                 Decimal
-  paymentGatewayResponse Json?
-  purpose                String
-  paymentType            PaymentType?
-  status                 PaymentStatus @default(PENDING)
-  transactionId          String        @unique
-  parentTransactionId    String?       @db.Uuid
-  paymentDate            DateTime      @default(now())
-  expiresAt              DateTime?
-  parentTransaction      Payment?      @relation("RefundRelation", fields: [parentTransactionId], references: [id])
-  refunds                Payment[]     @relation("RefundRelation")
-  
-  certificateRequest     CertificateRequest?    @relation("CertificatePayments", fields: [certificateRequestId], references: [id], onDelete: Cascade)
-  application            Application?           @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  plan                   Plan?                  @relation("PlanPayments", fields: [planId], references: [id], onDelete: Cascade)
-  service                Service?               @relation("ServicePayments", fields: [serviceId], references: [id])
-  user                   User?                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userPlan               UserPlan[]             // ✅ Optional reverse relation
+  @@index([userId, createdAt])
+  @@index([applicationId])
+  @@index([certificateRequestId])
+  @@index([planId])
+}
+
+model PaymentAttempt {
+  id                 String               @id @default(uuid()) @db.Uuid
+  chargeId           String               @db.Uuid
+  gateway            PaymentGateway       @default(RAZORPAY)
+  status             PaymentAttemptStatus @default(CREATING)
+  amountMinor        Int
+  currency           String               @default("INR")
+  gatewayOrderId     String?              @unique
+  gatewayPaymentId   String?              @unique
+  paymentMethod      String?
+  failureCode        String?
+  failureDescription String?
+  gatewayResponse    Json?
+  expiresAt          DateTime
+  settledAt          DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  charge             PaymentCharge        @relation("ChargeAttempts", fields: [chargeId], references: [id], onDelete: Restrict)
+  settledCharge      PaymentCharge?        @relation("PaidAttempt")
+  webhookEvents      PaymentWebhookEvent[]
+  refund             PaymentRefund?
+  userPlan           UserPlan?
+
+  @@index([chargeId, status])
+  @@index([status, updatedAt])
+}
+
+model PaymentWebhookEvent {
+  id               String               @id @default(uuid()) @db.Uuid
+  eventKey         String               @unique
+  providerEventId  String?
+  payloadDigest    String
+  eventType        String
+  gatewayOrderId   String?
+  gatewayPaymentId String?
+  attemptId        String?              @db.Uuid
+  status           PaymentWebhookStatus @default(RECEIVED)
+  failureReason    String?
+  receivedAt       DateTime             @default(now())
+  processedAt      DateTime?
+  attempt          PaymentAttempt?      @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+
+  @@index([providerEventId])
+  @@index([attemptId])
+}
+
+model PaymentRefund {
+  id               String              @id @default(uuid()) @db.Uuid
+  chargeId         String              @db.Uuid
+  attemptId        String              @unique @db.Uuid
+  requestedBy      String              @db.Uuid
+  amountMinor      Int
+  currency         String              @default("INR")
+  status           PaymentRefundStatus @default(REQUESTED)
+  reason           String
+  gatewayRefundId  String?             @unique
+  gatewayResponse  Json?
+  requestedAt      DateTime            @default(now())
+  processedAt      DateTime?
+  updatedAt        DateTime            @updatedAt
+  charge           PaymentCharge       @relation(fields: [chargeId], references: [id], onDelete: Restrict)
+  attempt          PaymentAttempt      @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+  requestedByAdmin User                @relation("PaymentRefundRequestedBy", fields: [requestedBy], references: [id], onDelete: Restrict)
+
+  @@index([chargeId])
+  @@index([requestedBy])
+}
+
+model ScheduledJobLease {
+  name      String   @id
+  holderId  String
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
 }
 
 model Plan {
@@ -164,8 +332,9 @@ model Plan {
   duration    Int       // e.g., in days or months
   benefits    String[]
   createdAt   DateTime  @default(now())
-  payments    Payment[]   @relation("PlanPayments")
-  userPlans   UserPlan[]  // ✅ New relation
+  deletedAt   DateTime?
+  paymentCharges PaymentCharge[]
+  userPlans   UserPlan[]  // âœ… New relation
 }
 
 
@@ -173,14 +342,14 @@ model UserPlan {
   id          String      @id @default(uuid()) @db.Uuid
   userId      String      @db.Uuid
   planId      String      @db.Uuid
-  paymentId   String?     @db.Uuid
+  paymentAttemptId String? @unique @db.Uuid
   startDate   DateTime    @default(now())
   endDate     DateTime
   isActive    Boolean     @default(true)
 
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   plan        Plan        @relation(fields: [planId], references: [id], onDelete: Cascade)
-  payment     Payment?    @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  paymentAttempt PaymentAttempt? @relation(fields: [paymentAttemptId], references: [id], onDelete: Restrict)
 }
 
 model Notification {
@@ -228,9 +397,10 @@ model CertificateRequest {
   isResolved     Boolean                  @default(false)
   createdAt      DateTime                 @default(now())
   resolvedAt     DateTime?
+  deletedAt      DateTime?
   user           User                     @relation("UserCertificateRequests", fields: [userId], references: [id], onDelete: Cascade)
   updates        CertificateUpdate[]      // All messages & admin updates
-  payments       Payment[]                @relation("CertificatePayments")
+  paymentCharges PaymentCharge[]
 }
 
 model CertificateUpdate {
@@ -249,6 +419,7 @@ model CertificateUpdate {
   updateType            CertificateUpdateType
   certificateRequest    CertificateRequest  @relation(fields: [certificateRequestId], references: [id], onDelete: Cascade)
   updater               User                @relation("UserCertificateUpdates", fields: [updatedBy], references: [id], onDelete: Cascade)
+  sourcePaymentCharge   PaymentCharge?
 }
 
 
@@ -258,6 +429,28 @@ enum Role {
   USER
 }
 
+enum OtpPurpose {
+  SIGNUP_PHONE
+  LOGIN_PHONE
+}
+
+enum AssetStatus {
+  TEMPORARY
+  ATTACHED
+  DELETED
+}
+
+enum AssetContext {
+  DOCUMENT
+  APPLICATION_UPDATE
+  CERTIFICATE_UPDATE
+}
+
+enum InvitationDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
 enum TokenType {
   REFRESH
   FCM
@@ -322,11 +515,53 @@ enum UpdateType {
 }
 
 
-enum PaymentStatus {
+enum PaymentGateway {
+  RAZORPAY
+}
+
+enum PaymentTargetType {
+  APPLICATION
+  CERTIFICATE
+  PLAN
+}
+
+enum PaymentCategory {
+  INITIAL
+  OBJECTION
+  ADDITIONAL
+  CORRECTION
+  PLAN
+}
+
+enum PaymentChargeStatus {
+  OPEN
+  PAID
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentAttemptStatus {
+  CREATING
   PENDING
+  AUTHORIZED
   SUCCESS
   FAILED
   EXPIRED
+  DUPLICATE_SUCCESS
+}
+
+enum PaymentWebhookStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+enum PaymentRefundStatus {
+  REQUESTED
+  PENDING
+  PROCESSED
+  FAILED
 }
 
 enum AudienceType {

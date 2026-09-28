@@ -1,17 +1,18 @@
+import { randomUUID } from "crypto";
 import { Request, Response } from "express";
 import { createCertificateRequestSchema } from "../zodSchema/certificate.schema";
 import { prisma } from "../config/db";
 import { AuthRequest } from "../types/custom";
 import { formatToIndianNumber } from "../utils/lib";
-import { CertificateRequestStatus, CertificateUpdateType, PaymentStatus, PaymentType, Prisma } from "@prisma/client";
+import { CertificateRequestStatus, CertificateUpdateType } from "@prisma/client";
 import { Decimal } from "@prisma/client/runtime/library";
-import Phonepe from "../services/PhonePe";
-import { initiateCertificatePaymentSchema } from "../zodSchema/payment.schema";
-import { logger } from "../utils/logger";
-import Razorpay from "../services/Razorpay";
 import { generateTicketNumber } from "../utils/ticketGenerator";
 import Notification from "../services/Notification";
-import { io } from "..";
+import { getIo } from "../socket";
+import { AssetAccessError, claimAssetReferences, createAssetRepository } from "../services/uploadedAsset";
+import { createCharge } from "../modules/payments/chargeService";
+import { certificateChargeInput } from "../modules/payments/domainChargeCreation";
+import { createPaymentChargeRepository } from "../modules/payments/repository";
 
 export const createCertificateRequest = async (req: Request, res: Response) => {
   try {
@@ -104,7 +105,7 @@ export const createCertificateRequest = async (req: Request, res: Response) => {
     });
 
     // 🔴 Emit live socket event (your existing code)
-    io.to("ADMINS").emit("new-notification", {
+    getIo().to("ADMINS").emit("new-notification", {
       trackingId: newRequest.requestNo,
       message: `New certificate request submitted by ${fullName}`,
       status: newRequest.isResolved ? "resolved" : "pending",
@@ -303,16 +304,17 @@ export const getCertificateRequestByRequestNo = async (req: Request, res: Respon
             },
           },
         },
-        payments: {
-          orderBy: { paymentDate: "desc" },
+        paymentCharges: {
+          orderBy: { createdAt: "desc" },
           select: {
-            amount: true,
+            id: true,
+            amountMinor: true,
+            currency: true,
             status: true,
             purpose: true,
-            paymentType: true,
-            transactionId: true,
-            paymentMethod: true,
-            paymentDate: true,
+            category: true,
+            paidAt: true,
+            createdAt: true,
           },
         },
       },
@@ -338,14 +340,14 @@ export const getCertificateRequestByRequestNo = async (req: Request, res: Respon
     }
 
     // 💰 Compute payment summary
-    const successfulPayments = certificateRequest.payments.filter(
-      (p) => p.status === "SUCCESS"
+    const successfulPayments = certificateRequest.paymentCharges.filter(
+      (payment) => payment.status === "PAID"
     );
     const totalPaid = successfulPayments.reduce(
-      (sum, p) => sum + Number(p.amount),
+      (sum, payment) => sum + payment.amountMinor / 100,
       0
     );
-    const paymentCount = certificateRequest.payments.length;
+    const paymentCount = certificateRequest.paymentCharges.length;
 
     // 🕓 Get latest update
     const latestUpdate = certificateRequest.updates[0] || null;
@@ -367,7 +369,7 @@ export const getCertificateRequestByRequestNo = async (req: Request, res: Respon
       latestUpdate,
 
       userDetails: certificateRequest.user,
-      paymentHistory: certificateRequest.payments,
+      paymentHistory: certificateRequest.paymentCharges,
       updateHistory: certificateRequest.updates,
     };
 
@@ -386,9 +388,6 @@ export const getCertificateRequestByRequestNo = async (req: Request, res: Respon
   }
 };
 
-
-
-
 export const updateCertificateWithRoleBasedRules = async (req: Request, res: Response) => {
   try {
     const actor = (req as AuthRequest).auth;
@@ -396,8 +395,7 @@ export const updateCertificateWithRoleBasedRules = async (req: Request, res: Res
     const {
       status,
       message,
-      attachmentUrl,
-      attachmentPublicId,
+      attachmentAssetId,
       chargesRequired,
       docRequired,
       pendingPayment,
@@ -499,10 +497,10 @@ export const updateCertificateWithRoleBasedRules = async (req: Request, res: Res
           isResolved = true;
           resolvedAt = new Date();
         } else if (status === "COMPLETED") {
-          if (!attachmentUrl || !attachmentPublicId) {
+          if (!attachmentAssetId) {
             return res.status(400).json({
               success: false,
-              message: "Attachment URL and Public ID are required for completed status.",
+              message: "An uploaded asset ID is required for completed status.",
             });
           }
           finalMessage = message || "Certificate uploaded successfully.";
@@ -541,7 +539,7 @@ export const updateCertificateWithRoleBasedRules = async (req: Request, res: Res
         });
       }
 
-      if (!message || !attachmentUrl && !attachmentPublicId) {
+      if (!message && !attachmentAssetId) {
         return res.status(400).json({
           success: false,
           message: "Message or attachment is required.",
@@ -568,14 +566,22 @@ export const updateCertificateWithRoleBasedRules = async (req: Request, res: Res
     // ==========================================================
     // 🧩 TRANSACTION — Create Update + Update Certificate
     // ==========================================================
-    await prisma.$transaction(async (tx) => {
+    const updateId = randomUUID();
+    const paymentCharge = await prisma.$transaction(async (tx) => {
+      const [attachment] = await claimAssetReferences({
+        assetIds: attachmentAssetId ? [attachmentAssetId] : [],
+        actor,
+        context: "CERTIFICATE_UPDATE",
+        referenceId: updateId,
+      }, { repository: createAssetRepository(tx) });
       await tx.certificateUpdate.create({
         data: {
+          id: updateId,
           certificateRequestId: certificate.id,
           updatedBy: actor.id,
           message: finalMessage,
-          attachmentUrl: attachmentUrl || null,
-          attachmentPublicId: attachmentPublicId || null,
+          attachmentUrl: attachment?.url || null,
+          attachmentPublicId: attachment?.publicId || null,
           updateType,
           prevStatus: certificate.status,
           newStatus,
@@ -593,6 +599,14 @@ export const updateCertificateWithRoleBasedRules = async (req: Request, res: Res
           pendingPayment: pendingPay,
         },
       });
+      return isAdmin && chargesRequired && currentCharge
+        ? createCharge(certificateChargeInput({
+            userId: certificate.userId,
+            certificateRequestId: certificate.id,
+            sourceUpdateId: updateId,
+            chargesRequired: currentCharge,
+          }), { repository: createPaymentChargeRepository(tx) })
+        : null;
     });
 
     if (isUser) {
@@ -607,7 +621,7 @@ export const updateCertificateWithRoleBasedRules = async (req: Request, res: Res
       });
 
       // 🔴 Emit live socket event (your existing code)
-      io.to("ADMINS").emit("new-notification", {
+      getIo().to("ADMINS").emit("new-notification", {
         trackingId: certificate.requestNo,
         message: finalMessage,
         status: newStatus,
@@ -622,10 +636,19 @@ export const updateCertificateWithRoleBasedRules = async (req: Request, res: Res
       nextStatus: newStatus,
       nextAction: nextAction || "Awaiting next step.",
       paymentDue: currentCharge || null,
+      paymentCharge: paymentCharge ? {
+        chargeId: paymentCharge.id,
+        amountMinor: paymentCharge.amountMinor,
+        currency: paymentCharge.currency,
+        purpose: paymentCharge.purpose,
+      } : null,
       pendingDocs,
       pendingPay,
     });
   } catch (error: any) {
+    if (error instanceof AssetAccessError) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
     console.error("updateCertificateWithRoleBasedRules Error:", error);
     return res.status(500).json({
       success: false,
@@ -634,255 +657,3 @@ export const updateCertificateWithRoleBasedRules = async (req: Request, res: Res
     });
   }
 };
-
-
-
-export const initiatePhonepePayment = async (req: Request, res: Response) => {
-  const parsedData = initiateCertificatePaymentSchema.parse(req.body);
-  const { amount, requestNo, paymentType = 'ADDITIONAL' } = parsedData;
-
-  const user = (req as AuthRequest)?.auth;
-
-  if (!user?.id)
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-
-  if (!requestNo || typeof requestNo !== "string") {
-    return res.status(400).json({ message: "Invalid ticket number format" });
-  }
-
-  if (!amount || isNaN(amount) || Number(amount) <= 0) {
-    return res
-      .status(400)
-      .json({ message: "Minimum payment amount is ₹1." });
-  }
-
-  try {
-    // ✅ Fetch application with only its latest update
-    const certificateRequest = await prisma.certificateRequest.findUnique({
-      where: { requestNo },
-      include: {
-        updates: {
-          orderBy: { createdAt: "desc" },
-          take: 1, // ✅ fetch only the most recent update
-        },
-      },
-    });
-
-    if (!certificateRequest) {
-      return res.status(404).json({ message: "certificate request not found" });
-    }
-
-    if (certificateRequest.userId !== user.id) {
-      return res
-        .status(403)
-        .json({ message: "You are not authorized for this certificate request" });
-    }
-
-    const lastUpdate = certificateRequest.updates[0];
-
-    if (!lastUpdate) {
-      return res.status(400).json({
-        success: false,
-        message: "No updates found for this certificate request.",
-      });
-    }
-
-    // ✅ Check if the latest update has payment pending
-    if (!certificateRequest?.pendingPayment || !lastUpdate.chargesRequired) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "No pending payment found in the latest update. Please refresh or contact support.",
-      });
-    }
-
-    const expectedAmount = new Decimal(lastUpdate.chargesRequired);
-    const providedAmount = new Decimal(amount);
-
-    if (!expectedAmount.equals(providedAmount)) {
-      return res.status(400).json({
-        success: false,
-        message: `Amount mismatch. Expected ₹${expectedAmount.toString()} but received ₹${providedAmount.toString()}.`,
-      });
-    }
-
-
-    await prisma.payment.updateMany({
-      where: {
-        applicationId: certificateRequest.id,
-        status: PaymentStatus.PENDING,
-      },
-      data: { status: PaymentStatus.EXPIRED },
-    });
-
-
-    const referenceId = Math.floor(Math.random() * 90000000 + 10000000).toString();
-    const amountInPaise = providedAmount.mul(100).toNumber();
-
-    // ✅ Create new payment record
-    const paymentRecord = await prisma.payment.create({
-      data: {
-        userId: certificateRequest.userId,
-        certificateRequestId: certificateRequest.id,
-        transactionId: referenceId,
-        paymentMethod: "PHONEPEPG",
-        amount: providedAmount,
-        status: PaymentStatus.PENDING,
-        paymentType: paymentType as PaymentType,
-        purpose:
-          "Payment for additional charges on certificate request " +
-          certificateRequest.requestNo,
-      },
-    });
-
-    const redirectUrl =
-      process.env.NODE_ENV === "development"
-        ? `http://localhost:3000/payment/response?transactionReference=${referenceId}`
-        : `https://legaldhara.in/payment/response?transactionReference=${referenceId}`;
-
-    // ✅ Initiate payment via PhonePe
-    const phonepeResponse = await Phonepe.initiatePayment(
-      amountInPaise,
-      referenceId,
-      redirectUrl,
-      { udf1: 'CERTIFICATE', udf2: referenceId, udf3: certificateRequest.requestNo }
-    );
-
-    if (!phonepeResponse) {
-      await prisma.payment.update({
-        where: { id: paymentRecord.id },
-        data: { status: PaymentStatus.FAILED },
-      });
-      return res
-        .status(400)
-        .json({ success: false, message: "Failed to initiate transaction" });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Payment initiated. Proceed to pay.",
-      redirectUrl: phonepeResponse.redirectUrl,
-    });
-
-  } catch (error) {
-    logger.error("PhonePe Payment Initiation Error during certificate payment:", error);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-
-export const initiateRazorpayPayment = async (req: Request, res: Response) => {
-  const parsedData = initiateCertificatePaymentSchema.parse(req.body);
-  const { amount, requestNo, paymentType = 'ADDITIONAL' } = parsedData;
-  const user = (req as AuthRequest)?.auth;
-
-  if (!user?.id)
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-
-  if (!requestNo || typeof requestNo !== "string") {
-    return res.status(400).json({ message: "Invalid request number format" });
-  }
-
-  if (!amount || isNaN(amount) || Number(amount) <= 0) {
-    return res.status(400).json({ message: "Minimum payment amount is ₹1." });
-  }
-
-  try {
-    const certificateRequest = await prisma.certificateRequest.findUnique({
-      where: { requestNo },
-      include: {
-        // service: true,
-        updates: { orderBy: { createdAt: "desc" }, take: 1 },
-      },
-    });
-
-    if (!certificateRequest)
-      return res.status(404).json({ message: "Certificate request not found" });
-
-    if (certificateRequest.userId !== user.id)
-      return res
-        .status(403)
-        .json({ message: "You are not authorized for this application" });
-
-    const lastUpdate = certificateRequest.updates[0];
-    if (!lastUpdate)
-      return res
-        .status(400)
-        .json({ success: false, message: "No updates found for this application." });
-
-    if (!certificateRequest.pendingPayment || !lastUpdate.chargesRequired) {
-      return res.status(400).json({
-        success: false,
-        message: "No pending payment found in the latest update.",
-      });
-    }
-
-    const expectedAmount = new Decimal(lastUpdate.chargesRequired);
-    const providedAmount = new Decimal(amount);
-
-    if (!expectedAmount.equals(providedAmount)) {
-      return res.status(400).json({
-        success: false,
-        message: `Amount mismatch. Expected ₹${expectedAmount.toString()} but received ₹${providedAmount.toString()}.`,
-      });
-    }
-
-    // Expire older pending payments
-    await prisma.payment.updateMany({
-      where: { applicationId: certificateRequest.id, status: PaymentStatus.PENDING },
-      data: { status: PaymentStatus.EXPIRED },
-    });
-
-    const referenceId = Math.floor(Math.random() * 90000000 + 10000000).toString();
-    const amountInPaise = providedAmount.mul(100).toNumber();
-
-
-    // ✅ Create new payment record
-    const paymentRecord = await prisma.payment.create({
-      data: {
-        userId: certificateRequest.userId,
-        certificateRequestId: certificateRequest.id,
-        transactionId: referenceId,
-        paymentMethod: "RAZORPAY",
-        amount: providedAmount,
-        status: PaymentStatus.PENDING,
-        paymentType: paymentType as PaymentType,
-        purpose:
-          "Payment for additional charges on certificate request " +
-          certificateRequest.requestNo,
-      },
-    });
-
-    // ✅ Create Razorpay order
-    const razorOrder = await Razorpay.createOrder(
-      amountInPaise,
-      "INR",
-      referenceId,
-      { udf1: 'CERTIFICATE', udf2: referenceId, udf3: requestNo }
-    );
-
-    if (!razorOrder) {
-      await prisma.payment.update({
-        where: { id: paymentRecord.id },
-        data: { status: PaymentStatus.FAILED },
-      });
-      return res
-        .status(400)
-        .json({ success: false, message: "Failed to initiate transaction" });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Razorpay order created successfully.",
-      order: razorOrder,
-      keyId: process.env.RAZORPAY_KEY_ID,
-      amount: amountInPaise,
-      currency: "INR",
-      requestNo,
-    });
-  } catch (error) {
-    console.error("Razorpay Payment Initiation Error:", error);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-};
-

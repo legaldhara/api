@@ -1,8 +1,7 @@
 import nodemailer, { Transporter } from "nodemailer";
-import * as imaps from "imap-simple";
+import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import dotenv from "dotenv";
-import { ImapSimple, Message } from "imap-simple";
 import { logger } from "../utils/logger";
 
 dotenv.config();
@@ -57,56 +56,51 @@ class MailService {
       console.log(`Mail sent from ${fromEmail} to ${to}`);
     } catch (error) {
       logger.error("Error sending mail:", error);
+      throw error;
     }
   };
 
   async receive(limit: number = 10): Promise<any[]> {
-    const config = {
-      imap: {
+    const client = new ImapFlow({
+      host: process.env.IMAP_HOST || "imap.hostinger.com",
+      port: Number(process.env.IMAP_PORT) || 993,
+      secure: true,
+      auth: {
         user: process.env.MAIL_USER!,
-        password: process.env.MAIL_PASS!,
-        host: process.env.IMAP_HOST || "imap.hostinger.com",
-        port: Number(process.env.IMAP_PORT) || 993,
-        tls: true,
-        authTimeout: 5000,
+        pass: process.env.MAIL_PASS!,
       },
-    };
+      logger: false,
+    });
 
     try {
-      const connection: ImapSimple = await imaps.connect(config);
-      await connection.openBox("INBOX");
+      await client.connect();
+      const lock = await client.getMailboxLock("INBOX");
+      try {
+        const total = client.mailbox ? client.mailbox.exists : 0;
+        if (total === 0) return [];
 
-      const searchCriteria = ["ALL"];
-      const fetchOptions = {
-        bodies: [""],
-        markSeen: false,
-      };
- 
-      const messages: Message[] = await connection.search(searchCriteria, fetchOptions);
-      const latest = messages.slice(-limit);
-
-      const emails = await Promise.all(
-        latest.map(async (item) => {
-          const part = item.parts.find((part) => part.which === "");
-          if (!part || !part.body) return null;
-
-          const parsed = await simpleParser(part.body);
-
-          return {
+        const start = Math.max(1, total - limit + 1);
+        const emails = [];
+        for await (const message of client.fetch(`${start}:*`, { source: true })) {
+          if (!message.source) continue;
+          const parsed = await simpleParser(message.source);
+          emails.push({
             from: parsed.from?.text,
             subject: parsed.subject,
             date: parsed.date,
             text: parsed.text,
             html: parsed.html,
-          };
-        })
-      );
-
-      await connection.end();
-      return emails.filter(Boolean);
+          });
+        }
+        return emails;
+      } finally {
+        lock.release();
+      }
     } catch (error) {
       console.error("Error fetching emails:", error);
       return [];
+    } finally {
+      if (client.usable) await client.logout();
     }
   }
 

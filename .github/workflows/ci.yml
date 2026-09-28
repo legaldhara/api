@@ -1,0 +1,41 @@
+name: API CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+        working-directory: server
+      - run: npx prisma validate
+        working-directory: server
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      - run: npm test
+        working-directory: server
+      - run: npm run typecheck
+        working-directory: server
+      - run: npm run build
+        working-directory: server
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      - run: bash deploy/scripts/validate.sh
+      - run: docker build --target migration -t legaldhara-api:migration-ci server
+      - run: docker build --target runtime -t legaldhara-api:runtime-ci server

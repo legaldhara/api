@@ -1,12 +1,12 @@
 import express from "express";
 
 import { asyncHandler } from "../utils/lib";
-import { buyPlan, buyPlanByRazorpay, getPlans } from "../controller/plan.contoller";
+import { createPlanCharge, getPlans } from "../controller/plan.contoller";
+import { authenticate } from "../middleware/authMiddleware";
 
 const router = express.Router();
 
 router.get("/", asyncHandler(getPlans));
-router.post("/buy", asyncHandler(buyPlan));
-router.post("/create-order", asyncHandler(buyPlanByRazorpay));
+router.post("/:planId/charge", authenticate, asyncHandler(createPlanCharge));
 
 export default router;

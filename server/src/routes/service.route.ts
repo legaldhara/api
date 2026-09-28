@@ -2,6 +2,7 @@ import express from "express";
 import { asyncHandler } from "../utils/lib";
 import { authenticate } from "../middleware/authMiddleware";
 import { authorize } from "../middleware/authorize";
+import { requireAdminMfa } from "../middleware/requireAdminMfa";
 import {
   createService,
   updateService,
@@ -18,6 +19,7 @@ serviceRouter.get("/:id", asyncHandler(getService));
 serviceRouter.use(authenticate);
 
 serviceRouter.use(authorize("ADMIN","COADMIN"));
+serviceRouter.use(requireAdminMfa);
 
 serviceRouter.post("/create", asyncHandler(createService));
 serviceRouter.put("/:id", asyncHandler(updateService));

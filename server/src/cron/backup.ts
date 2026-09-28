@@ -1,6 +1,5 @@
 import cron from "node-cron";
 import { createSqlBackup } from "../config/backup-sql";
-import { createExcelBackup } from "../config/backup-excel";
 import { uploadToDrive } from "../config/google-drive";
 
 
@@ -9,10 +8,8 @@ async function runBackup() {
     console.log("Starting backup...");
 
     // const sql = await createSqlBackup();
-    // const excel = await createExcelBackup();
 
     // await uploadToDrive(sql.file);
-    // await uploadToDrive(excel);
 
     // cleanupOldBackups();
 

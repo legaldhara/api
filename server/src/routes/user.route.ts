@@ -3,6 +3,7 @@ import { asyncHandler } from "../utils/lib";
 
 import { authenticate } from "../middleware/authMiddleware";
 import { authorize } from "../middleware/authorize";
+import { requireAdminMfa } from "../middleware/requireAdminMfa";
 import { getAllUsers, getUserById, updateUser } from "../controller/user.controller";
 
 const userRouter = express.Router();
@@ -16,6 +17,7 @@ userRouter.put("/update", asyncHandler(updateUser));
 userRouter.get("/details", asyncHandler(getUserById));
 
 userRouter.use(authorize("ADMIN","COADMIN"));
+userRouter.use(requireAdminMfa);
 
 userRouter.get("/detail/:id", asyncHandler(getUserById));
 userRouter.get("/getallusers", asyncHandler(getAllUsers));

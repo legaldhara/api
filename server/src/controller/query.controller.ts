@@ -7,7 +7,7 @@ import { getQueryReceivedEmail, getQueryResolvedEmail } from "../utils/email";
 import { logger } from "../utils/logger";
 import MailService from "../services/Mail";
 import Notification from "../services/Notification";
-import { io } from "..";
+import { getIo } from "../socket";
 
 export const createUserQuery = async (
   req: Request,
@@ -79,7 +79,7 @@ export const createUserQuery = async (
     });
 
     // 🔴 Emit live socket event (your existing code)
-    io.to("ADMINS").emit("new-notification", {
+    getIo().to("ADMINS").emit("new-notification", {
       trackingId: newQuery.queryNo,
       message: `A new query submitted by ${fullName}`,
       status: newQuery.isResolved ? "resolved" : "pending",

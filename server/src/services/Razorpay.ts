@@ -3,20 +3,20 @@ import crypto from "crypto";
 import { logger } from "../utils/logger";
 
 class RazorpayService {
-  private client: Razorpay;
+  private client?: Razorpay;
 
   constructor() {
     const keyId = process.env.RAZORPAY_KEY_ID!;
     const keySecret = process.env.RAZORPAY_KEY_SECRET!;
 
-    if (!keyId || !keySecret) {
-      throw new Error("Razorpay credentials are missing.");
+    if (keyId && keySecret) {
+      this.client = new Razorpay({ key_id: keyId, key_secret: keySecret });
     }
+  }
 
-    this.client = new Razorpay({
-      key_id: keyId,
-      key_secret: keySecret,
-    });
+  private getClient(): Razorpay {
+    if (!this.client) throw new Error("Razorpay credentials are missing.");
+    return this.client;
   }
 
   /**
@@ -24,7 +24,7 @@ class RazorpayService {
    */
   async createOrder(amount: number, currency = "INR", receipt?: string, notes?: Record<string, any>) {
     try {
-      const order = await this.client.orders.create({
+      const order = await this.getClient().orders.create({
         amount, // Convert to paise
         currency,
         receipt: receipt || `receipt_${Date.now()}`,
@@ -53,7 +53,9 @@ class RazorpayService {
         .update(body)
         .digest("hex");
 
-      const isValid = expectedSignature === signature;
+      const provided = Buffer.from(signature, "hex");
+      const expected = Buffer.from(expectedSignature, "hex");
+      const isValid = provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
 
       logger.info("Razorpay Signature Verification", { isValid });
       return isValid;
@@ -68,7 +70,7 @@ class RazorpayService {
    */
   async fetchOrder(orderId: string) {
     try {
-      return await this.client.orders.fetch(orderId);
+      return await this.getClient().orders.fetch(orderId);
     } catch (error: any) {
       logger.error("Razorpay fetchOrder failed", {
         message: error.message,
@@ -80,7 +82,7 @@ class RazorpayService {
 
   async fetchPayment(paymentId: string) {
     try {
-      return await this.client.payments.fetch(paymentId);
+      return await this.getClient().payments.fetch(paymentId);
     } catch (error: any) {
       logger.error("Razorpay fetchPayment failed", {
         message: error.message,
@@ -90,12 +92,21 @@ class RazorpayService {
     }
   }
 
+  async fetchPaymentsForOrder(orderId: string) {
+    try {
+      return await this.getClient().orders.fetchPayments(orderId);
+    } catch (error: any) {
+      logger.error("Razorpay fetchPaymentsForOrder failed", { message: error.message, stack: error.stack });
+      throw new Error("Failed to fetch Razorpay order payments");
+    }
+  }
+
   /**
    * ✅ Initiate refund
    */
   async initiateRefund(paymentId: string, amount?: number, notes?: Record<string, any>) {
     try {
-      const refund = await this.client.payments.refund(paymentId, {
+      const refund = await this.getClient().payments.refund(paymentId, {
         amount: amount ? amount * 100 : undefined,
         notes,
       });
@@ -121,7 +132,9 @@ class RazorpayService {
         .update(body)
         .digest("hex");
 
-      const isValid = expectedSignature === signature;
+      const provided = Buffer.from(signature, "hex");
+      const expected = Buffer.from(expectedSignature, "hex");
+      const isValid = provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
 
       logger.info("Razorpay Webhook Validation", { isValid });
       return isValid;

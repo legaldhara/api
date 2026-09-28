@@ -1,15 +1,13 @@
 import express from "express";
-import { authenticate } from "../middleware/authMiddleware";
-import { upload } from "../config/cloudinary";
-import { asyncHandler } from "../utils/lib";
+import { acceptUploads } from "../config/uploadPolicy";
 import { deleteImageHandler, uploadImages } from "../controller/media.controller";
-
+import { authenticate } from "../middleware/authMiddleware";
+import { asyncHandler } from "../utils/lib";
 
 const router = express.Router();
 
 router.use(authenticate);
-
-router.post('/upload', upload.array('files', 5), asyncHandler(uploadImages))
-router.delete('/delete/:publicId', asyncHandler(deleteImageHandler))
+router.post("/upload", acceptUploads, asyncHandler(uploadImages));
+router.delete("/:assetId", asyncHandler(deleteImageHandler));
 
 export default router;

@@ -42,4 +42,5 @@ LegalDhara.txt
 .venv
 *.dump
 *.sql
+!server/prisma/migrations/**/migration.sql
 secrets/

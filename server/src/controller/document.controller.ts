@@ -1,48 +1,64 @@
+import { randomUUID } from "crypto";
 import { Request, Response } from "express";
 import { AuthRequest } from "../types/custom";
 import { prisma } from "../config/db";
 import Notification from '../services/Notification'
-import { io } from "..";
+import { getIo } from "../socket";
+import { AssetAccessError, claimUploadedAsset, createAssetRepository } from "../services/uploadedAsset";
 // 🟢 Create Document (User or Admin)
 export const createDocument = async (req: Request, res: Response) => {
   const user = (req as AuthRequest).auth;
-  const userId = user.id; // Optional: Admin can specify userId
-  const { title, description, url, publicId } = req.body;
+  if (!user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-  if (!user && userId) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-  }
-
-  if (!title || !url || !publicId) {
-    return res.status(400).json({ success: false, message: "Missing required fields" });
+  const { title, description, assetId } = req.body;
+  if (!title || !assetId) {
+    return res.status(400).json({ success: false, message: "Title and asset ID are required" });
   }
 
   try {
-    const document = await prisma.document.create({
-      data: { title, description, url, publicId, userId },
+    const documentId = randomUUID();
+    const document = await prisma.$transaction(async (transaction) => {
+      const asset = await claimUploadedAsset({
+        assetId,
+        actor: user,
+        context: "DOCUMENT",
+        referenceId: documentId,
+      }, { repository: createAssetRepository(transaction) });
+
+      return transaction.document.create({
+        data: {
+          id: documentId,
+          title,
+          description,
+          url: asset.secureUrl!,
+          publicId: asset.publicId,
+          userId: user.id,
+        },
+      });
     });
 
     await Notification.createAdminNotification({
       title: `New Document Received: #${title}`,
-      body: `A new certificate request has been submitted by ${user.name}.`,
+      body: `A new document has been submitted by ${user.name}.`,
       notificationType: "document",
       role: "ADMIN",
       audienceType: "SPECIFIC",
-      clickAction: `/documents`, // where admin should click
+      clickAction: "/documents",
     });
 
-    // 🔴 Emit live socket event (your existing code)
-    io.to("ADMINS").emit("new-notification", {
+    getIo().to("ADMINS").emit("new-notification", {
       trackingId: "",
-      message: `New certificate request submitted by ${user.name}`,
-      status: url ? "success" : "pending",
+      message: `New document submitted by ${user.name}`,
+      status: document.url ? "success" : "pending",
       createdAt: new Date(),
-      clickAction: `/documents`,
+      clickAction: "/documents",
     });
-
 
     return res.status(201).json({ success: true, data: document });
   } catch (err) {
+    if (err instanceof AssetAccessError) {
+      return res.status(err.statusCode).json({ success: false, message: err.message });
+    }
     console.error(err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }

@@ -1,42 +1,54 @@
-// middleware/authMiddleware.ts
-import { Request, Response, NextFunction } from "express";
-import JWT from "jsonwebtoken";
-import { decryptRSA } from "../config/encryption";
-import { AuthPayload, AuthRequest } from "../types/custom";
+import { NextFunction, Request, Response } from "express";
+import { prisma } from "../config/db";
+import { verifyFirebaseIdToken } from "../config/firebase";
+import { AuthRequest, FirebaseIdentityRequest } from "../types/custom";
 
-export const authenticate = (req: Request, res: Response, next: NextFunction) => {
-  const token = req.cookies?.idToken;
 
-  if (!token) {
-    res.status(401).json({ success: false, error: "Authentication required" });
+export const authenticateFirebaseIdentity = async (request: Request, response: Response, next: NextFunction): Promise<void> => {
+  const authorization = request.headers.authorization;
+  if (!authorization?.startsWith("Bearer ")) {
+    response.status(401).json({ success: false, error: "Authentication required" });
     return;
   }
-
   try {
-    const decoded = JWT.verify(token, process.env.JWT_SECRET!) as { data: string };
-    
-    if (!decoded?.data) {
-      res.status(401).json({ success: false, error: "Invalid token payload" });
-      return;
-    }
-
-    const decrypted = decryptRSA(decoded.data);
-    const user: AuthPayload = decrypted;
-
-    (req as AuthRequest).auth = {
-      ...((req as AuthRequest).auth || {}),
-      ...user,
+    const decoded = await verifyFirebaseIdToken(authorization.slice(7), true);
+    (request as FirebaseIdentityRequest).firebaseIdentity = {
+      uid: decoded.uid,
+      email: decoded.email,
+      emailVerified: decoded.email_verified === true,
     };
-
     next();
-  } catch (err: any) {
-     if (err.name === "TokenExpiredError") {
-      res.status(401).json({ success: false, error: "Session expired. Please login again." });
+  } catch {
+    response.status(401).json({ success: false, error: "Authentication required" });
+  }
+};
+export const authenticate = async (request: Request, response: Response, next: NextFunction): Promise<void> => {
+  const authorization = request.headers.authorization;
+  if (!authorization?.startsWith("Bearer ")) {
+    response.status(401).json({ success: false, error: "Authentication required" });
+    return;
+  }
+  try {
+    const decoded = await verifyFirebaseIdToken(authorization.slice(7), true);
+    const user = await prisma.user.findUnique({
+      where: { uid: decoded.uid },
+      select: { id: true, uid: true, fullName: true, email: true, phone: true, role: true, isActive: true },
+    });
+    if (!user) {
+      response.status(401).json({ success: false, error: "Authentication required" });
       return;
     }
-    console.error("Auth error:", err.message);
-    res.status(401).json({ success: false, error: "Invalid or expired token" });
-    return;
-
+    if (!user.isActive) {
+      response.status(403).json({ success: false, error: "Account disabled" });
+      return;
+    }
+    if (user.role === "USER" && decoded.email_verified !== true) {
+      response.status(403).json({ success: false, error: "Verification required" });
+      return;
+    }
+    (request as AuthRequest).auth = { id: user.id, uid: decoded.uid, role: user.role, email: user.email, phone: user.phone, name: user.fullName };
+    next();
+  } catch {
+    response.status(401).json({ success: false, error: "Authentication required" });
   }
 };

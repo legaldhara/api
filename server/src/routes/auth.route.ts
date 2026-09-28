@@ -1,52 +1,23 @@
 import express from "express";
+import { getSession } from "../controller/session.controller";
+import { authenticate, authenticateFirebaseIdentity } from "../middleware/authMiddleware";
 import { asyncHandler } from "../utils/lib";
-import {
-  authSession,
-  localhost,
-  logout,
-  refreshSession,
-  loginAdminByPhone,
-  userRegister,
-//   getUserProfile,
-//   updateUserProfile,
-  registerCoadmin,
-  loginUserByEmailAndPassword,
-  loginUserByPhone,
-  updateUserPassword,
-} from "../controller/auth.controller";
-import { authenticate } from "../middleware/authMiddleware";
 import { authorize } from "../middleware/authorize";
+import { clearAdminMfa, confirmMfa, enrollMfa, skipAdminMfaForDevelopment, verifyAdminMfa } from "../controller/adminMfa.controller";
+import { completeSignup, requestSignupPhoneOtp, verifySignupPhoneOtp } from "../controller/customerSignup.controller";
+import { requestPhoneLoginOtp, verifyPhoneLoginOtp } from "../controller/customerLogin.controller";
 
 const router = express.Router();
-
-router.post('/validate', asyncHandler(localhost)); 
-
-router.post('/admin/login', asyncHandler(loginAdminByPhone));
-
-router.post('/user/login-by-phone', asyncHandler(loginUserByPhone));
-router.post('/user/login-by-email', asyncHandler(loginUserByEmailAndPassword));
-
-router.post('/refresh', asyncHandler(refreshSession));
-
-router.post("/user/register", asyncHandler(userRegister));
-
-router.post("/user/update-password", asyncHandler(updateUserPassword));
-
-router.use(authenticate);
-
-router.get('/session', asyncHandler(authSession));
-router.post('/logout', asyncHandler(logout));
-
-
-// --- Profile Related
-// router.get("/user/get-profile", asyncHandler(getUserProfile));
-// router.put("/user/update-profile", asyncHandler(updateUserProfile));
-
-// --- Admin Related
-
-// --- CoAdmin Related
-router.use(authorize("ADMIN"));
-router.post("/coadmin/register", asyncHandler(registerCoadmin));
-
+router.post("/otp/login/request", asyncHandler(requestPhoneLoginOtp));
+router.post("/otp/login/verify", asyncHandler(verifyPhoneLoginOtp));
+router.post("/signup/phone/request", authenticateFirebaseIdentity, asyncHandler(requestSignupPhoneOtp));
+router.post("/signup/phone/verify", authenticateFirebaseIdentity, asyncHandler(verifySignupPhoneOtp));
+router.post("/signup/complete", authenticateFirebaseIdentity, asyncHandler(completeSignup));
+router.get("/session", authenticate, asyncHandler(getSession));
+router.post("/mfa/enroll", authenticate, authorize("ADMIN", "COADMIN"), asyncHandler(enrollMfa));
+router.post("/mfa/confirm", authenticate, authorize("ADMIN", "COADMIN"), asyncHandler(confirmMfa));
+router.post("/mfa/verify", authenticate, authorize("ADMIN", "COADMIN"), asyncHandler(verifyAdminMfa));
+router.post("/mfa/skip-development", authenticate, authorize("ADMIN", "COADMIN"), asyncHandler(skipAdminMfaForDevelopment));
+router.post("/mfa/logout", authenticate, asyncHandler(clearAdminMfa));
 
 export default router;

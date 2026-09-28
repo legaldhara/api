@@ -2,6 +2,7 @@ import express from "express";
 import { asyncHandler } from "../utils/lib";
 import { authenticate } from "../middleware/authMiddleware";
 import { authorize } from "../middleware/authorize";
+import { requireAdminMfa } from "../middleware/requireAdminMfa";
 import { getApplicationCountByService, getApplicationCountByStatus, getCertificateRequestStats, getRecentUserActivity, getApplicationTrendByMonth, getMonthlyUserRegistration, getPaymentSummary, getRevenueAndCountByPaymentType, getUserAnalyticsSummary, getQueryStats } from "../controller/dashboard.controller";
 
 const dashboardRouter = express.Router();
@@ -9,6 +10,7 @@ const dashboardRouter = express.Router();
 dashboardRouter.use(authenticate);
 
 dashboardRouter.use(authorize("ADMIN", "COADMIN"));
+dashboardRouter.use(requireAdminMfa);
 
 dashboardRouter.get("/users/summary", asyncHandler(getUserAnalyticsSummary));
 dashboardRouter.get("/users/monthly", asyncHandler(getMonthlyUserRegistration));

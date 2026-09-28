@@ -13,8 +13,7 @@ export const createCertificateRequestSchema = z.object({
 export const createCertificateUpdateSchema = z.object({
   certificateRequestId: z.string().uuid("Invalid request ID"),
   message: z.string().optional(),
-  attachmentUrl: z.string().url().optional(),
-  attachmentPublicId: z.string().optional(),
+  attachmentAssetId: z.string().uuid("Invalid uploaded asset ID").optional(),
   updateType: z.enum([
     "USER_MESSAGE",
     "ADMIN_MESSAGE",

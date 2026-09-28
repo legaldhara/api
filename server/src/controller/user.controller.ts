@@ -81,7 +81,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<Response
             select: {
               applications: true,
               query: true,
-              payments: true,
+              paymentCharges: true,
               userPlans: true,
               certificateRequests: true,
             },
@@ -192,15 +192,15 @@ export const getUserById = async (
             objectionReason: true,
             createdAt: true,
             // only include successful payments for each application (recent ones)
-            payments: {
-              where: { status: 'SUCCESS' },
-              orderBy: { paymentDate: 'desc' },
+            paymentCharges: {
+              where: { status: 'PAID' },
+              orderBy: { paidAt: 'desc' },
               select: {
-                amount: true,
-                paymentType: true,
+                amountMinor: true,
+                category: true,
                 status: true,
-                transactionId: true,
-                paymentDate: true,
+                paidAttemptId: true,
+                paidAt: true,
                 purpose: true,
               },
               take: 5,
@@ -280,51 +280,30 @@ export const updateUser = async (
   res: Response
 ): Promise<Response | void> => {
   const user = (req as AuthRequest).auth;
-
-  if (!user || !user.id) {
-    return res.status(401).json({
-      success: false,
-      message: "Unauthorized: User not authenticated",
-    });
+  if (!user?.id) {
+    return res.status(401).json({ success: false, message: "Unauthorized: User not authenticated" });
   }
 
   const parsed = updateUserProfileSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({
-      success: false,
-      message: "Validation failed",
-    });
+    return res.status(400).json({ success: false, message: "Validation failed" });
   }
 
-  const { fullName, email, phone, dob, gender, city } = parsed.data;
-
   try {
-    const existingUser = await prisma.user.findUnique({
-      where: { id: user.id },
-    });
+    const existingUser = await prisma.user.findUnique({ where: { id: user.id } });
+    if (!existingUser) return res.status(404).json({ success: false, message: "User not found" });
 
-    if (!existingUser) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
+    const { fullName, dob, gender, city } = parsed.data;
     const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: {
-        fullName: fullName ?? existingUser.fullName,
-        email: email ?? existingUser.email,
-        phone: phone ?? existingUser.phone,
-        dob: dob ? new Date(dob) : existingUser.dob,
-        gender: gender ?? existingUser.gender,
-        city: city ?? existingUser.city,
-        updatedAt: new Date(),
+        ...(fullName !== undefined && { fullName }),
+        ...(dob !== undefined && { dob: new Date(`${dob}T00:00:00.000Z`) }),
+        ...(gender !== undefined && { gender }),
+        ...(city !== undefined && { city }),
       },
       select: {
         fullName: true,
-        email: true,
-        phone: true,
         dob: true,
         gender: true,
         city: true,
@@ -336,13 +315,9 @@ export const updateUser = async (
       message: "User profile updated successfully",
       user: updatedUser,
     });
-  } catch (err: any) {
-    console.error("Update user error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: err.message,
-    });
+  } catch (err) {
+    console.error("Update user error:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 

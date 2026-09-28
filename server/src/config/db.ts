@@ -27,7 +27,9 @@ async function connectPrisma() {
   }
 }
 
-connectPrisma();
+if (process.env.NODE_ENV !== "test") {
+  void connectPrisma();
+}
 
 // Prevent creating multiple instances during hot reload in dev
 if (process.env.NODE_ENV !== "production") {

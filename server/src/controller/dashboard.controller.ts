@@ -184,9 +184,9 @@ export const getApplicationTrendByMonth = async (req: Request, res: Response) =>
  */
 export const getPaymentSummary = async (req: Request, res: Response) => {
   try {
-    const total = await prisma.payment.count();
+    const total = await prisma.paymentAttempt.count();
 
-    const statusCounts = await prisma.payment.groupBy({
+    const statusCounts = await prisma.paymentAttempt.groupBy({
       by: ["status"],
       _count: { status: true },
     });
@@ -200,13 +200,13 @@ export const getPaymentSummary = async (req: Request, res: Response) => {
 
     statusCounts.forEach((s) => (counts[s.status] = s._count.status));
 
-    const successfulPayments = await prisma.payment.findMany({
-      where: { status: "SUCCESS" },
-      select: { amount: true },
+    const successfulPayments = await prisma.paymentCharge.findMany({
+      where: { status: "PAID" },
+      select: { amountMinor: true },
     });
 
     const totalRevenue = successfulPayments.reduce(
-      (sum, p) => sum + Number(p.amount),
+      (sum, payment) => sum + payment.amountMinor / 100,
       0
     );
 
@@ -225,16 +225,16 @@ export const getPaymentSummary = async (req: Request, res: Response) => {
  */
 export const getRevenueAndCountByPaymentType = async (req: Request, res: Response) => {
   try {
-    const grouped = await prisma.payment.groupBy({
-      by: ["paymentType"],
-      _count: { paymentType: true },
-      _sum: { amount: true },
+    const grouped = await prisma.paymentCharge.groupBy({
+      by: ["category"],
+      _count: { category: true },
+      _sum: { amountMinor: true },
     });
 
-    const formatted = grouped.map((g) => ({
-      paymentType: g.paymentType || "UNSPECIFIED",
-      count: g._count.paymentType,
-      totalAmount: Number(g._sum.amount ?? 0),
+    const formatted = grouped.map((group) => ({
+      paymentType: group.category,
+      count: group._count.category,
+      totalAmount: Number(group._sum.amountMinor ?? 0) / 100,
     }));
 
     return res.status(200).json({ success: true, data: formatted });
@@ -254,10 +254,10 @@ export const getMonthlyRevenueTrend = async (req: Request, res: Response) => {
     const end = endOfYear(new Date(year, 11));
 
     const raw = await prisma.$queryRaw<{ month: number; total: number }[]>`
-      SELECT EXTRACT(MONTH FROM "paymentDate") AS month,
-             SUM(CAST("amount" AS DOUBLE PRECISION)) AS total
-      FROM "Payment"
-      WHERE "status" = 'SUCCESS' AND "paymentDate" BETWEEN ${start} AND ${end}
+      SELECT EXTRACT(MONTH FROM "paidAt") AS month,
+             SUM("amountMinor") / 100.0 AS total
+      FROM "PaymentCharge"
+      WHERE "status" = 'PAID' AND "paidAt" BETWEEN ${start} AND ${end}
       GROUP BY month ORDER BY month;
     `;
 

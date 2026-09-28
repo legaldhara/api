@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Request, Response } from "express";
 import { prisma } from "../config/db";
 import {
@@ -7,193 +8,12 @@ import Notification from "../services/Notification";
 import { AuthRequest } from "../types/custom";
 import { Decimal } from '@prisma/client/runtime/library';
 import { generateTicketNumber } from "../utils/ticketGenerator";
-import Phonepe from "../services/PhonePe";
-import Razorpay from "../services/Razorpay";
-import { logger } from "../utils/logger";
-import { directApplySchema } from "../zodSchema/service.schema";
-import { initiatePaymentSchema } from "../zodSchema/payment.schema";
-import { formatToIndianNumber } from "../utils/lib";
-import { ApplicationStatus, PaymentStatus, PaymentType, UpdateType } from "@prisma/client";
-import { io } from "..";
-
-//User
-export const createUserApplicationPayment = async (req: Request, res: Response) => {
-  try {
-    const parsedData = directApplySchema.safeParse(req.body);
-    if (!parsedData.success) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed",
-        errors: parsedData.error.format(),
-      });
-    }
-
-    const {
-      fullName,
-      email,
-      phone,
-      dob,
-      gender,
-      city,
-      termsAccepted,
-      serviceId,
-      serviceFor,
-      serviceName,
-      businessName,
-      amount,
-    } = parsedData.data;
-
-    if (!termsAccepted) {
-      return res
-        .status(400)
-        .json({ success: false, message: "You must accept the terms and conditions." });
-    }
-
-    let user = await prisma.user.findFirst({
-      where: {
-        OR: [{ phone: formatToIndianNumber(phone) }, { email }],
-      },
-    });
-
-    if (!user) {
-      user = await prisma.user.create({
-        data: {
-          fullName,
-          email,
-          phone: formatToIndianNumber(phone),
-          gender,
-          dob: dob ? new Date(dob) : undefined,
-          isActive: false,
-          city,
-          termsAccepted,
-          termsAcceptedAt: termsAccepted ? new Date() : undefined,
-        },
-      });
-    }
-
-    let application = await prisma.application.findFirst({
-      where: {
-        userId: user.id,
-        serviceId,
-        applicationStatus: ApplicationStatus.PAYMENT_REQUIRED,
-      },
-      include: {
-        service: { select: { price: true, governmentCharges: true } },
-      },
-    });
-
-    if (!application) {
-      const ticketNo = generateTicketNumber('APL');
-      application = await prisma.application.create({
-        data: {
-          userId: user.id,
-          serviceId,
-          serviceFor,
-          serviceName,
-          businessName,
-          ticketNo,
-          applicationStatus: ApplicationStatus.PAYMENT_REQUIRED,
-        },
-        include: {
-          service: {
-            select: {
-              price: true,
-              governmentCharges: true
-            }
-          },
-        },
-      });
-
-      const servicePrice = new Decimal(application.service.price);
-      const govtCharges = new Decimal(application.service.governmentCharges ?? 0);
-      const totalExpected = servicePrice.add(govtCharges);
-
-      // ✅ Log initial status update
-      await prisma.applicationUpdate.create({
-        data: {
-          applicationId: application.id,
-          updaterBy: user.id,
-          updateCharges: totalExpected,
-          message: "Application submitted and awaiting payment",
-          prevStatus: ApplicationStatus.AWAITING_ACTION,
-          newStatus: ApplicationStatus.PAYMENT_REQUIRED,
-          UpdateType: UpdateType.SYSTEM_GENERATED,
-          type: PaymentType.INITIAL,
-        },
-      });
-    }
-
-    if (!amount || isNaN(amount) || Number(amount) <= 0) {
-      return res.status(400).json({ message: "Minimum payment amount is ₹1." });
-    }
-
-    const servicePrice = new Decimal(application.service.price);
-    const govtCharges = new Decimal(application.service.governmentCharges ?? 0);
-
-    const totalExpected = servicePrice.add(govtCharges);
-
-    const providedPrice = new Decimal(amount);
-
-    if (!totalExpected.equals(providedPrice)) {
-      return res.status(400).json({ message: "Amount mismatch with service price." });
-    }
-
-    const amountInPaise = providedPrice.mul(100).toNumber();
-    const referenceId = Math.floor(Math.random() * 90000000 + 10000000).toString();
-
-
-    const paymentRecord = await prisma.payment.create({
-      data: {
-        userId: user.id || application.userId,
-        applicationId: application.id,
-        serviceId: application.serviceId,
-        transactionId: referenceId,
-        paymentMethod: "PHONEPEPG",
-        amount: providedPrice,
-        status: PaymentStatus.PENDING,
-        paymentType: PaymentType.INITIAL,
-        purpose: "Initial Payment"
-      },
-    });
-
-
-    const redirectUrl =
-      process.env.NODE_ENV === "development"
-        ? `http://localhost:3000/payment/response?transactionReference=${referenceId}`
-        : `https://legaldhara.in/payment/response?transactionReference=${referenceId}`;
-
-    const phonepeResponse = await Phonepe.initiatePayment(
-      amountInPaise,
-      referenceId,
-      redirectUrl,
-      {
-        udf1: 'APPLICATION',
-        udf2: referenceId,
-        udf3: application.ticketNo,
-      }
-    );
-
-    if (!phonepeResponse) {
-      await prisma.payment.update({
-        where: { id: paymentRecord.id },
-        data: { status: PaymentStatus.FAILED },
-      });
-      return res
-        .status(400)
-        .json({ success: false, message: "Failed to initiate transaction" });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Payment initiated. Proceed to pay.",
-      redirectUrl: phonepeResponse.redirectUrl,
-    });
-  } catch (error) {
-    console.error("Error in createUserApplicationPayment:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-};
-
+import { ApplicationStatus, PaymentType, Prisma, UpdateType } from "@prisma/client";
+import { getIo } from "../socket";
+import { AssetAccessError, claimAssetReferences, createAssetRepository, extractAssetIds } from "../services/uploadedAsset";
+import { createCharge } from "../modules/payments/chargeService";
+import { applicationChargeInput } from "../modules/payments/domainChargeCreation";
+import { createPaymentChargeRepository } from "../modules/payments/repository";
 
 export const createApplication = async (
   req: Request,
@@ -245,37 +65,44 @@ export const createApplication = async (
 
     const ticketNo = generateTicketNumber('APL');
 
-    // Create application without price-related data
-    const newApplication = await prisma.application.create({
-      data: {
-        ticketNo,
-        userId: user.id,
-        serviceId,
-        serviceName: serviceName ?? service.name,
-        serviceFor,
-        businessName,
-        applicationStatus: ApplicationStatus.PAYMENT_REQUIRED,
-        createdAt: new Date(),
-      },
-    });
-
     const totalExpected = new Decimal(service.price).add(
       new Decimal(service.governmentCharges ?? 0)
     );
-
-    // Create initial update record (handles payment info)
-    await prisma.applicationUpdate.create({
-      data: {
+    const { newApplication, charge } = await prisma.$transaction(async (tx) => {
+      const newApplication = await tx.application.create({
+        data: {
+          ticketNo,
+          userId: user.id,
+          serviceId,
+          serviceName: serviceName ?? service.name,
+          serviceFor,
+          businessName,
+          applicationStatus: ApplicationStatus.PAYMENT_REQUIRED,
+          createdAt: new Date(),
+        },
+      });
+      const initialUpdate = await tx.applicationUpdate.create({
+        data: {
+          applicationId: newApplication.id,
+          updaterBy: user.id,
+          updateCharges: totalExpected,
+          message: `Application submitted. Payment pending of ₹${totalExpected.toString()}`,
+          pendingPayment: true,
+          type: PaymentType.INITIAL,
+          UpdateType: UpdateType.SYSTEM_GENERATED,
+          prevStatus: ApplicationStatus.AWAITING_ACTION,
+          newStatus: ApplicationStatus.PAYMENT_REQUIRED,
+        },
+      });
+      const charge = await createCharge(applicationChargeInput({
+        userId: user.id,
         applicationId: newApplication.id,
-        updaterBy: user.id,
-        updateCharges: totalExpected,
-        message: `Application submitted. Payment pending of ₹${totalExpected.toString()}`,
-        pendingPayment: true,
-        type: PaymentType.INITIAL,
-        UpdateType: UpdateType.SYSTEM_GENERATED, // later can switch to SYSTEM_GENERATED
-        prevStatus: ApplicationStatus.AWAITING_ACTION,
-        newStatus: ApplicationStatus.PAYMENT_REQUIRED,
-      },
+        sourceUpdateId: initialUpdate.id,
+        servicePrice: service.price,
+        governmentCharges: service.governmentCharges ?? 0,
+        category: "INITIAL",
+      }), { repository: createPaymentChargeRepository(tx) });
+      return { newApplication, charge };
     });
 
     return res.status(201).json({
@@ -283,7 +110,11 @@ export const createApplication = async (
       message: "Application created successfully",
       application: {
         ...newApplication,
-        totalExpected: totalExpected.toString(), // returning for frontend use only
+        totalExpected: totalExpected.toString(),
+        chargeId: charge.id,
+        amountMinor: charge.amountMinor,
+        currency: charge.currency,
+        purpose: charge.purpose,
       },
     });
   } catch (err: any) {
@@ -295,271 +126,6 @@ export const createApplication = async (
     });
   }
 };
-
-
-export const initiatePhonepePayment = async (req: Request, res: Response) => {
-  const parsedData = initiatePaymentSchema.parse(req.body);
-  const { amount, ticketNo, paymentType } = parsedData;
-
-  const user = (req as AuthRequest)?.auth;
-
-  if (!user?.id)
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-
-  if (!ticketNo || typeof ticketNo !== "string") {
-    return res.status(400).json({ message: "Invalid ticket number format" });
-  }
-
-  if (!amount || isNaN(amount) || Number(amount) <= 0) {
-    return res
-      .status(400)
-      .json({ message: "Minimum payment amount is ₹1." });
-  }
-
-  try {
-    // ✅ Fetch application with only its latest update
-    const application = await prisma.application.findUnique({
-      where: { ticketNo },
-      include: {
-        service: true,
-        updates: {
-          orderBy: { createdAt: "desc" },
-          take: 1, // ✅ fetch only the most recent update
-        },
-      },
-    });
-
-    if (!application) {
-      return res.status(404).json({ message: "Application not found" });
-    }
-
-    if (application.userId !== user.id) {
-      return res
-        .status(403)
-        .json({ message: "You are not authorized for this application" });
-    }
-
-    const lastUpdate = application.updates[0];
-
-    if (!lastUpdate) {
-      return res.status(400).json({
-        success: false,
-        message: "No updates found for this application.",
-      });
-    }
-
-    // ✅ Check if the latest update has payment pending
-    if (!lastUpdate.pendingPayment || !lastUpdate.updateCharges) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "No pending payment found in the latest update. Please refresh or contact support.",
-      });
-    }
-
-    const expectedAmount = new Decimal(lastUpdate.updateCharges);
-    const providedAmount = new Decimal(amount);
-
-    if (!expectedAmount.equals(providedAmount)) {
-      return res.status(400).json({
-        success: false,
-        message: `Amount mismatch. Expected ₹${expectedAmount.toString()} but received ₹${providedAmount.toString()}.`,
-      });
-    }
-
-
-    await prisma.payment.updateMany({
-      where: {
-        applicationId: application.id,
-        status: PaymentStatus.PENDING,
-      },
-      data: { status: PaymentStatus.EXPIRED },
-    });
-
-
-    const referenceId = Math.floor(Math.random() * 90000000 + 10000000).toString();
-    const amountInPaise = providedAmount.mul(100).toNumber();
-
-    // ✅ Create new payment record
-    const paymentRecord = await prisma.payment.create({
-      data: {
-        userId: application.userId,
-        applicationId: application.id,
-        serviceId: application.serviceId,
-        transactionId: referenceId,
-        paymentMethod: "PHONEPEPG",
-        amount: providedAmount,
-        status: PaymentStatus.PENDING,
-        paymentType: (paymentType as PaymentType) || PaymentType.INITIAL,
-        purpose:
-          paymentType === PaymentType.INITIAL
-            ? "Initial Payment"
-            : "Additional Payment",
-      },
-    }); 
-
-    const redirectUrl =
-      process.env.NODE_ENV === "development"
-        ? `http://localhost:3000/payment/response?transactionReference=${referenceId}`
-        : `https://legaldhara.in/payment/response?transactionReference=${referenceId}`;
-
-    // ✅ Initiate payment via PhonePe
-    const phonepeResponse = await Phonepe.initiatePayment(
-      amountInPaise,
-      referenceId,
-      redirectUrl,
-      { udf1: 'APPLICATION', udf2: referenceId, udf3: ticketNo }
-    );
-
-    if (!phonepeResponse) {
-      await prisma.payment.update({
-        where: { id: paymentRecord.id },
-        data: { status: PaymentStatus.FAILED },
-      });
-      return res
-        .status(400)
-        .json({ success: false, message: "Failed to initiate transaction" });
-    }
-
-    // ✅ Link payment record to the last update
-    await prisma.applicationUpdate.update({
-      where: { id: lastUpdate.id },
-      data: { paymentId: paymentRecord.id },
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Payment initiated. Proceed to pay.",
-      redirectUrl: phonepeResponse.redirectUrl,
-    });
-  } catch (error) {
-    logger.error("PhonePe Payment Initiation Error:", error);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-
-export const initiateRazorpayPayment = async (req: Request, res: Response) => {
-  const parsedData = initiatePaymentSchema.parse(req.body);
-  const { amount, ticketNo, paymentType } = parsedData;
-  const user = (req as AuthRequest)?.auth;
-
-  if (!user?.id)
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-
-  if (!ticketNo || typeof ticketNo !== "string") {
-    return res.status(400).json({ message: "Invalid ticket number format" });
-  }
-
-  if (!amount || isNaN(amount) || Number(amount) <= 0) {
-    return res.status(400).json({ message: "Minimum payment amount is ₹1." });
-  }
-
-  try {
-    const application = await prisma.application.findUnique({
-      where: { ticketNo },
-      include: {
-        service: true,
-        updates: { orderBy: { createdAt: "desc" }, take: 1 },
-      },
-    });
-
-    if (!application)
-      return res.status(404).json({ message: "Application not found" });
-
-    if (application.userId !== user.id)
-      return res
-        .status(403)
-        .json({ message: "You are not authorized for this application" });
-
-    const lastUpdate = application.updates[0];
-    if (!lastUpdate)
-      return res
-        .status(400)
-        .json({ success: false, message: "No updates found for this application." });
-
-    if (!lastUpdate.pendingPayment || !lastUpdate.updateCharges) {
-      return res.status(400).json({
-        success: false,
-        message: "No pending payment found in the latest update.",
-      });
-    }
-
-    const expectedAmount = new Decimal(lastUpdate.updateCharges);
-    const providedAmount = new Decimal(amount);
-
-    if (!expectedAmount.equals(providedAmount)) {
-      return res.status(400).json({
-        success: false,
-        message: `Amount mismatch. Expected ₹${expectedAmount.toString()} but received ₹${providedAmount.toString()}.`,
-      });
-    }
-
-    // Expire older pending payments
-    await prisma.payment.updateMany({
-      where: { applicationId: application.id, status: PaymentStatus.PENDING },
-      data: { status: PaymentStatus.EXPIRED },
-    });
-
-    const referenceId = Math.floor(Math.random() * 90000000 + 10000000).toString();
-    const amountInPaise = providedAmount.mul(100).toNumber();
-
-    // ✅ Create payment record
-    const paymentRecord = await prisma.payment.create({
-      data: {
-        userId: application.userId,
-        applicationId: application.id,
-        serviceId: application.serviceId,
-        transactionId: referenceId, // store Razorpay order_id
-        paymentMethod: "RAZORPAY",
-        amount: providedAmount,
-        status: PaymentStatus.PENDING,
-        paymentType: (paymentType as PaymentType) || PaymentType.INITIAL,
-        purpose:
-          paymentType === PaymentType.INITIAL
-            ? "Initial Payment"
-            : "Additional Payment",
-      },
-    });
-
-    await prisma.applicationUpdate.update({
-      where: { id: lastUpdate.id },
-      data: { paymentId: paymentRecord.id },
-    });
-
-    // ✅ Create Razorpay order
-    const razorOrder = await Razorpay.createOrder(
-      amountInPaise,
-      "INR",
-      referenceId,
-      { udf1: 'APPLICATION', udf2: referenceId, udf3: ticketNo }
-    );
-
-    if (!razorOrder) {
-      await prisma.payment.update({
-        where: { id: paymentRecord.id },
-        data: { status: PaymentStatus.FAILED },
-      });
-      return res.status(500).json({ message: "Failed to create Razorpay order" });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Razorpay order created successfully.",
-      order: razorOrder,
-      keyId: process.env.RAZORPAY_KEY_ID,
-      amount: amountInPaise,
-      currency: "INR",
-      ticketNo,
-    });
-  } catch (error) {
-    console.error("Razorpay Payment Initiation Error:", error);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-
-
 
 
 export const getUserApplications = async (
@@ -681,16 +247,17 @@ export const getApplicationById = async (
             },
           },
         },
-        payments: {
-          orderBy: { paymentDate: "desc" },
+        paymentCharges: {
+          orderBy: { createdAt: "desc" },
           select: {
-            amount: true,
+            id: true,
+            amountMinor: true,
+            currency: true,
             status: true,
             purpose: true,
-            paymentType: true,
-            transactionId: true,
-            paymentMethod: true,
-            paymentDate: true,
+            category: true,
+            paidAt: true,
+            createdAt: true,
           },
         },
       },
@@ -716,15 +283,15 @@ export const getApplicationById = async (
     }
 
     // 💰 Compute total paid + payment stats
-    const successfulPayments = application.payments.filter(
-      (p) => p.status === "SUCCESS"
+    const successfulPayments = application.paymentCharges.filter(
+      (payment) => payment.status === "PAID"
     );
     const totalPaid = successfulPayments.reduce(
-      (sum, p) => sum + Number(p.amount),
+      (sum, payment) => sum + payment.amountMinor / 100,
       0
     );
 
-    const paymentCount = application.payments.length;
+    const paymentCount = application.paymentCharges.length;
     const latestUpdate = application.updates[0] || null;
     const isExpired =
       application.autoCloseAt && new Date(application.autoCloseAt) < new Date();
@@ -746,7 +313,7 @@ export const getApplicationById = async (
       userDetails: application.user,
       serviceName: application.service.name,
 
-      paymentHistory: application.payments,
+      paymentHistory: application.paymentCharges,
       updateHistory: application.updates,
     };
 
@@ -876,7 +443,9 @@ export const createApplicationUpdate = async (req: Request, res: Response) => {
     const lastUpdate = application.updates?.[0];
     let newStatus = application.applicationStatus;
     let finalMessage = message || "Update added successfully.";
-    let responseMeta = meta ? (meta as object) : {};
+    const attachmentAssetIds = extractAssetIds(meta);
+    const { documents: _ignoredDocuments, ...safeMeta } = meta && typeof meta === "object" ? meta : {};
+    let responseMeta = safeMeta;
     let pendingDocs = false;
     let pendingPayment = false;
     let nextAction: string | null = null;
@@ -950,7 +519,7 @@ export const createApplicationUpdate = async (req: Request, res: Response) => {
 
       // 🗂️ Handle requested document uploads
       if (lastUpdate?.pendingDocs) {
-        if (!meta?.documents || meta.documents.length === 0) {
+        if (attachmentAssetIds.length === 0) {
           return res.status(400).json({
             success: false,
             message: "Please upload required documents.",
@@ -973,15 +542,24 @@ export const createApplicationUpdate = async (req: Request, res: Response) => {
     // ==========================================================
     // 🧩 TRANSACTION — Create Update + Update Application
     // ==========================================================
-    await prisma.$transaction(async (tx) => {
+    const updateId = randomUUID();
+    const paymentCharge = await prisma.$transaction(async (tx) => {
+      const documents = await claimAssetReferences({
+        assetIds: attachmentAssetIds,
+        actor,
+        context: "APPLICATION_UPDATE",
+        referenceId: updateId,
+      }, { repository: createAssetRepository(tx) });
+      responseMeta = { ...safeMeta, ...(documents.length > 0 && { documents }) };
       await tx.applicationUpdate.create({
         data: {
+          id: updateId,
           applicationId: application.id,
           updaterBy: actor.id,
           message: finalMessage,
           prevStatus: application.applicationStatus,
           newStatus,
-          meta: responseMeta,
+          meta: responseMeta as Prisma.InputJsonValue,
           updateCharges: currentCharge ?? new Decimal(0),
           pendingDocs,
           pendingPayment,
@@ -995,6 +573,16 @@ export const createApplicationUpdate = async (req: Request, res: Response) => {
           data: { applicationStatus: newStatus },
         });
       }
+      return isAdmin && pendingPayment && currentCharge
+        ? createCharge(applicationChargeInput({
+            userId: application.userId,
+            applicationId: application.id,
+            sourceUpdateId: updateId,
+            servicePrice: currentCharge,
+            governmentCharges: 0,
+            category: "ADDITIONAL",
+          }), { repository: createPaymentChargeRepository(tx) })
+        : null;
     });
 
 
@@ -1010,7 +598,7 @@ export const createApplicationUpdate = async (req: Request, res: Response) => {
       });
 
       // 🔴 Emit live socket event (your existing code)
-      io.to("ADMINS").emit("new-notification", {
+      getIo().to("ADMINS").emit("new-notification", {
         ticketNo: application.ticketNo,
         message: finalMessage,
         status: newStatus,
@@ -1025,9 +613,18 @@ export const createApplicationUpdate = async (req: Request, res: Response) => {
       nextStatus: newStatus,
       nextAction: nextAction || "Awaiting next step.",
       paymentDue: pendingPayment ? currentCharge : null,
+      paymentCharge: paymentCharge ? {
+        chargeId: paymentCharge.id,
+        amountMinor: paymentCharge.amountMinor,
+        currency: paymentCharge.currency,
+        purpose: paymentCharge.purpose,
+      } : null,
       pendingDocuments: pendingDocs,
     });
   } catch (err: any) {
+    if (err instanceof AssetAccessError) {
+      return res.status(err.statusCode).json({ success: false, message: err.message });
+    }
     console.error("Create Application Update Error:", err);
     return res.status(500).json({
       success: false,
@@ -1106,8 +703,8 @@ export const getAllApplications = async (
               UpdateType: true,
             },
           },
-          payments: {
-            select: { amount: true, status: true },
+          paymentCharges: {
+            select: { id: true, amountMinor: true, status: true },
           },
         },
       }),
@@ -1115,14 +712,14 @@ export const getAllApplications = async (
     ]);
 
     const formatted = applications.map((app) => {
-      const successfulPayments = app.payments.filter(
-        (p) => p.status === "SUCCESS"
+      const successfulPayments = app.paymentCharges.filter(
+        (payment) => payment.status === "PAID"
       );
       const totalPaid = successfulPayments.reduce(
-        (sum, p) => sum + Number(p.amount),
+        (sum, payment) => sum + payment.amountMinor / 100,
         0
       );
-      const paymentCount = app.payments.length;
+      const paymentCount = app.paymentCharges.length;
       const isExpired =
         app.autoCloseAt && new Date(app.autoCloseAt) < new Date();
 
@@ -1158,11 +755,11 @@ export const deleteApplication = async (
   req: Request,
   res: Response
 ): Promise<Response | void> => {
-  const appId = req.params.id;
+  const ticketNo = req.params.ticketNo;
 
   try {
     const application = await prisma.application.findUnique({
-      where: { id: appId },
+      where: { ticketNo },
     });
 
     if (!application) {
@@ -1172,13 +769,24 @@ export const deleteApplication = async (
       });
     }
 
-    await prisma.application.delete({
-      where: { id: appId },
-    });
+    if (([ApplicationStatus.COMPLETED, ApplicationStatus.CLOSED] as ApplicationStatus[]).includes(application.applicationStatus)) {
+      return res.status(409).json({ success: false, message: "Finalized applications cannot be cancelled." });
+    }
+
+    await prisma.$transaction([
+      prisma.paymentCharge.updateMany({
+        where: { applicationId: application.id, status: "OPEN" },
+        data: { status: "CANCELLED", cancelledAt: new Date() },
+      }),
+      prisma.application.update({
+        where: { id: application.id },
+        data: { applicationStatus: ApplicationStatus.CLOSED, deletedAt: new Date() },
+      }),
+    ]);
 
     return res.status(200).json({
       success: true,
-      message: "Application deleted successfully",
+      message: "Application cancelled successfully",
     });
   } catch (err: any) {
     console.error("Delete Application Error:", err.message);

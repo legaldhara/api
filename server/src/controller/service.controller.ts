@@ -190,7 +190,6 @@ export const getService = async (
       where: { id },
       include: {
         applications: true,
-        payments: true,
       },
     });
 
@@ -203,7 +202,7 @@ export const getService = async (
 
     // If user is not ADMIN or COADMIN, remove restricted fields
     if (user?.role === "USER") {
-      const { id, applications, payments, ...publicService } = service;
+      const { id, applications, ...publicService } = service;
       return res.status(200).json({
         success: true,
         service: publicService,
@@ -268,7 +267,6 @@ export const getAllServices = async (
           _count: {
             select: {
               applications: true,
-              payments: true,
             },
           },
         },

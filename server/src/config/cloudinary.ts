@@ -1,5 +1,4 @@
 import { v2 as cloudinary } from "cloudinary";
-import multer from 'multer';
 import 'dotenv/config'
 import { logger } from "../utils/logger";
 
@@ -8,9 +7,6 @@ cloudinary.config({
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET,
 })
-
-const storage = multer.memoryStorage();
-const upload = multer({ storage, limits: { files: 5 } });
 
 
 // async function imageUploadUtil(files: string[], folder?: string): Promise<any[]> {
@@ -139,4 +135,4 @@ async function deleteAllImages(batchSize = 10, delayMs = 1000): Promise<any[]> {
 }
 
 
-export { upload, fileUploadUtil, deleteFile, listImagesInFolder, renameImage, getImageDetails, deleteAllImages }
+export { fileUploadUtil, deleteFile, listImagesInFolder, renameImage, getImageDetails, deleteAllImages }

@@ -1,0 +1,67 @@
+name: Deploy API Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full 40-character commit SHA from main; leave blank for the selected workflow commit
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Resolve exact commit
+        id: release
+        env:
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+          DEFAULT_SHA: ${{ github.sha }}
+        run: |
+          DEPLOY_SHA="${REQUESTED_SHA:-$DEFAULT_SHA}"
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "A full commit SHA is required" >&2; exit 2; }
+          echo "deploy_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.deploy_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Verify selected release
+        working-directory: server
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+        run: |
+          npm ci
+          npx prisma validate
+          npm test
+          npm run typecheck
+          npm run build
+      - name: Configure pinned SSH identity
+        env:
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
+        run: |
+          install -m 0700 -d "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ssh/deploy_key"
+          chmod 0600 "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
+          chmod 0600 "$RUNNER_TEMP/ssh/known_hosts"
+      - name: Deploy selected release
+        env:
+          DEPLOY_SHA: ${{ steps.release.outputs.deploy_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
+        run: |
+          ssh -i "$RUNNER_TEMP/ssh/deploy_key" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
+            "${VPS_SSH_USER}@${VPS_HOST}" \
+            "cd /opt/legaldhara/api && ./deploy/scripts/deploy.sh '${DEPLOY_SHA}'"

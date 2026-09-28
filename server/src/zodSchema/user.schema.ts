@@ -26,15 +26,12 @@ export const userRegisterSchema = z.object({
 });
 
 export const updateUserProfileSchema = z.object({
-  fullName: z.string().min(1).optional(),
-  email: z.email().optional(),
-  phone: z.string().min(10).max(15).optional(),
-  dob: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date format. Expected YYYY-MM-DD")
-    .optional(),
+  fullName: z.string().trim().min(2).max(100).optional(),
+  dob: z.iso.date().refine((value) => new Date(`${value}T00:00:00.000Z`) <= new Date(), "Date of birth cannot be in the future").optional(),
   gender: z.enum(["Male", "Female", "Other"]).optional(),
-  city: z.string().min(2).optional(),
+  city: z.string().trim().min(2).max(100).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, {
+  message: "At least one profile field is required",
 });
 
 

@@ -3,6 +3,7 @@ import { asyncHandler } from "../utils/lib";
 import { authenticate } from "../middleware/authMiddleware";
 import { listNotifications, markAllRead, markAsRead, saveFCMToken, unreadCount } from "../controller/notification.controller";
 import { authorize } from "../middleware/authorize";
+import { requireAdminMfa } from "../middleware/requireAdminMfa";
 
 const router = express.Router();
 
@@ -11,6 +12,7 @@ router.use(authenticate);
 router.post('/save-token', asyncHandler(saveFCMToken));
 
 router.use(authorize('COADMIN', 'ADMIN'));
+router.use(requireAdminMfa);
 
 router.get('/', asyncHandler(listNotifications));
 router.get('/unread-count', asyncHandler(unreadCount));

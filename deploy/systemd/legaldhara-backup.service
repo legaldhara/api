@@ -1,0 +1,12 @@
+[Unit]
+Description=LegalDhara PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=legaldhara-deploy
+Group=legaldhara-deploy
+EnvironmentFile=/opt/legaldhara/api/deploy/.env.production
+ExecStart=/opt/legaldhara/api/deploy/scripts/backup-postgres.sh daily
+Nice=10
