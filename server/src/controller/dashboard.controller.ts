@@ -227,6 +227,7 @@ export const getRevenueAndCountByPaymentType = async (req: Request, res: Respons
   try {
     const grouped = await prisma.paymentCharge.groupBy({
       by: ["category"],
+      where: { status: "PAID" },
       _count: { category: true },
       _sum: { amountMinor: true },
     });

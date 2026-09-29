@@ -1,3 +1,4 @@
+import { PaymentAttemptStatus, Prisma } from "@prisma/client";
 import { NextFunction, Request, Response } from "express";
 import { prisma } from "../../config/db";
 import { AuthRequest } from "../../types/custom";
@@ -106,17 +107,63 @@ export const listMine = async (request: Request, response: Response): Promise<vo
 };
 
 export const listAdmin = async (request: Request, response: Response): Promise<void> => {
-  const attempts = await prisma.paymentAttempt.findMany({
-    orderBy: { createdAt: "desc" },
-    take: Math.min(Number(request.query.limit) || 50, 100),
-    select: {
-      id: true, status: true, amountMinor: true, currency: true, gatewayOrderId: true,
-      gatewayPaymentId: true, failureCode: true, failureDescription: true, createdAt: true, settledAt: true,
-      charge: { select: { id: true, userId: true, targetType: true, category: true, purpose: true, status: true } },
-      refund: { select: { status: true, gatewayRefundId: true, requestedAt: true, processedAt: true } },
-    },
+  const page = Math.max(Number(request.query.page) || 1, 1);
+  const limit = Math.min(Math.max(Number(request.query.limit) || 50, 1), 100);
+  const search = typeof request.query.search === "string" ? request.query.search.trim() : "";
+  const requestedStatus = typeof request.query.status === "string" ? request.query.status : "";
+  const status = Object.values(PaymentAttemptStatus).includes(requestedStatus as PaymentAttemptStatus)
+    ? requestedStatus as PaymentAttemptStatus
+    : undefined;
+  const searchableCharge: Prisma.PaymentChargeWhereInput = search ? {
+    OR: [
+      { purpose: { contains: search, mode: "insensitive" } },
+      { user: { is: { OR: [
+        { fullName: { contains: search, mode: "insensitive" } },
+        { email: { contains: search, mode: "insensitive" } },
+        { phone: { contains: search, mode: "insensitive" } },
+      ] } } },
+      { application: { is: { ticketNo: { contains: search, mode: "insensitive" } } } },
+      { certificateRequest: { is: { requestNo: { contains: search, mode: "insensitive" } } } },
+      { plan: { is: { name: { contains: search, mode: "insensitive" } } } },
+    ],
+  } : {};
+  const where: Prisma.PaymentAttemptWhereInput = {
+    ...(status ? { status } : {}),
+    ...(search ? {
+      OR: [
+        { gatewayOrderId: { contains: search, mode: "insensitive" } },
+        { gatewayPaymentId: { contains: search, mode: "insensitive" } },
+        { charge: { is: searchableCharge } },
+      ],
+    } : {}),
+  };
+
+  const [attempts, totalRecords] = await Promise.all([
+    prisma.paymentAttempt.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * limit,
+      take: limit,
+      select: {
+        id: true, status: true, amountMinor: true, currency: true, gatewayOrderId: true,
+        gatewayPaymentId: true, failureCode: true, failureDescription: true, createdAt: true, settledAt: true,
+        charge: { select: {
+          id: true, userId: true, targetType: true, category: true, purpose: true, status: true,
+          user: { select: { fullName: true, email: true, phone: true } },
+          application: { select: { ticketNo: true } },
+          certificateRequest: { select: { requestNo: true } },
+          plan: { select: { name: true } },
+        } },
+        refund: { select: { status: true, gatewayRefundId: true, requestedAt: true, processedAt: true } },
+      },
+    }),
+    prisma.paymentAttempt.count({ where }),
+  ]);
+  response.status(200).json({
+    success: true,
+    data: attempts,
+    pagination: { page, limit, totalRecords, totalPages: Math.ceil(totalRecords / limit) },
   });
-  response.status(200).json({ success: true, data: attempts });
 };
 
 export const getAdminAttempt = async (request: Request, response: Response): Promise<void> => {
