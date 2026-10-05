@@ -11,6 +11,8 @@ import type {
 import { assertCaseAction } from "./transitionPolicy";
 import { CaseDomainError, type CaseAction, type CaseActor, type RequestCaseStatus } from "./types";
 import { claimAssetReferences as claimUploadedAssetReferences } from "../../services/uploadedAsset";
+import { caseChargeInput } from "../payments/domainChargeCreation";
+import type { PaymentCategory, PaymentChargeRecord } from "../payments/types";
 
 type EventView = Omit<CaseEventRecord, "result">;
 
@@ -64,6 +66,23 @@ interface CompleteCaseCommand extends CommandBase {
   completionReference?: string;
 }
 
+interface RequestPaymentCommand extends CommandBase {
+  category: Exclude<PaymentCategory, "PLAN">;
+  amountMinor: number;
+  purpose: string;
+}
+
+interface PaymentSettlementInput {
+  caseId: string;
+  requirementId: string;
+  chargeId: string;
+  attemptId: string;
+}
+
+export interface PaymentRequirementResult extends RequirementResult {
+  charge: PaymentChargeRecord;
+}
+
 export interface RequirementResult {
   case: RequestCaseRecord;
   requirement: CaseRequirementRecord;
@@ -75,6 +94,7 @@ interface CaseServiceDependencies {
   claimAssetReferences: typeof claimUploadedAssetReferences;
   now: () => Date;
   id: () => string;
+  maximumPaymentAmountMinor: number;
 }
 
 interface TransitionDefinition {
@@ -92,6 +112,7 @@ export const createCaseService = (
     claimAssetReferences: claimUploadedAssetReferences,
     now: () => new Date(),
     id: randomUUID,
+    maximumPaymentAmountMinor: Number(process.env.MAX_PAYMENT_AMOUNT_MINOR) || 100_000_000,
     ...overrides,
   };
   const execute = async (
@@ -263,6 +284,134 @@ export const createCaseService = (
           requirementId: requirement.id,
         };
         const result: RequirementResult = { case: updatedCase, requirement, event, events: [event] };
+        await transaction.appendEvent({ ...event, result });
+        return result;
+      }),
+    requestPayment: (input: RequestPaymentCommand): Promise<PaymentRequirementResult> =>
+      repository.transaction(async (transaction) => {
+        const loaded = await loadCommandCase(transaction, input);
+        if (loaded.duplicate) return loaded.duplicate as PaymentRequirementResult;
+        const requestCase = loaded.requestCase!;
+        assertCaseAction(requestCase, input.actor, "REQUEST_PAYMENT");
+        if (
+          !Number.isSafeInteger(input.amountMinor) ||
+          input.amountMinor <= 0 ||
+          input.amountMinor > dependencies.maximumPaymentAmountMinor
+        ) {
+          throw new CaseDomainError("Payment amount is outside the allowed range", 400, "INVALID_PAYMENT_AMOUNT");
+        }
+        if (await transaction.findOpenPaymentRequirement(input.caseId)) {
+          throw new CaseDomainError(
+            "This case already has an open payment requirement",
+            409,
+            "OPEN_PAYMENT_REQUIREMENT_EXISTS",
+          );
+        }
+
+        const purpose = normalizeText(input.purpose, "Payment purpose", 160);
+        const charge = await transaction.createPaymentCharge(caseChargeInput({
+          userId: requestCase.ownerId,
+          type: requestCase.type,
+          applicationId: requestCase.applicationId,
+          certificateRequestId: requestCase.certificateRequestId,
+          category: input.category,
+          amountMinor: input.amountMinor,
+          purpose,
+        }));
+        const requirement = await transaction.createRequirement({
+          id: dependencies.id(),
+          caseId: input.caseId,
+          type: "PAYMENT",
+          createdBy: input.actor.id,
+          title: "Payment required",
+          instructions: purpose,
+          documentLabels: [],
+          paymentChargeId: charge.id,
+        });
+        const updatedCase = await transaction.updateStatus({
+          caseId: input.caseId,
+          expectedVersion: input.expectedVersion,
+          changes: { status: "ACTION_REQUIRED" },
+        });
+        if (!updatedCase) {
+          throw new CaseDomainError("Case changed; refresh and retry", 409, "CASE_VERSION_CONFLICT");
+        }
+
+        const event: EventView = {
+          id: dependencies.id(),
+          caseId: input.caseId,
+          actorId: input.actor.id,
+          actorRoleSnapshot: input.actor.role,
+          type: "PAYMENT_REQUESTED",
+          previousStatus: requestCase.status,
+          newStatus: updatedCase.status,
+          idempotencyKey: input.idempotencyKey,
+          requirementId: requirement.id,
+          paymentChargeId: charge.id,
+        };
+        const result: PaymentRequirementResult = {
+          case: updatedCase,
+          requirement,
+          charge,
+          event,
+          events: [event],
+        };
+        await transaction.appendEvent({ ...event, result });
+        return result;
+      }),
+    recordPaymentSettlement: (input: PaymentSettlementInput): Promise<RequirementResult> =>
+      repository.transaction(async (transaction) => {
+        const idempotencyKey = `payment:${input.attemptId}`;
+        const duplicate = await transaction.findIdempotentEvent(input.caseId, idempotencyKey);
+        if (duplicate) return duplicate.result as RequirementResult;
+
+        const requestCase = await transaction.loadCase(input.caseId);
+        if (!requestCase) throw new CaseDomainError("Case not found", 404, "CASE_NOT_FOUND");
+        const requirement = await transaction.findRequirementByPaymentCharge(input.chargeId);
+        if (
+          !requirement ||
+          requirement.id !== input.requirementId ||
+          requirement.caseId !== input.caseId ||
+          requirement.type !== "PAYMENT"
+        ) {
+          throw new CaseDomainError("Payment requirement not found", 409, "PAYMENT_REQUIREMENT_NOT_FOUND");
+        }
+        if (requirement.status !== "OPEN") {
+          throw new CaseDomainError("Payment requirement is not open", 409, "REQUIREMENT_NOT_OPEN");
+        }
+
+        const openRequirementsBeforeSettlement = requestCase.openRequirements;
+        const updatedRequirement = await transaction.updateRequirement({
+          requirementId: requirement.id,
+          changes: { status: "FULFILLED", fulfilledAt: dependencies.now() },
+        });
+        const shouldResumeReview = openRequirementsBeforeSettlement === 1;
+        const updatedCase = await transaction.updateStatus({
+          caseId: input.caseId,
+          expectedVersion: requestCase.version,
+          changes: { status: shouldResumeReview ? "UNDER_REVIEW" : "ACTION_REQUIRED" },
+        });
+        if (!updatedCase) {
+          throw new CaseDomainError("Case changed; settlement must be retried", 409, "CASE_VERSION_CONFLICT");
+        }
+
+        const event: EventView = {
+          id: dependencies.id(),
+          caseId: input.caseId,
+          type: "PAYMENT_CONFIRMED",
+          previousStatus: requestCase.status,
+          newStatus: updatedCase.status,
+          idempotencyKey,
+          requirementId: requirement.id,
+          paymentChargeId: input.chargeId,
+          metadata: { attemptId: input.attemptId },
+        };
+        const result: RequirementResult = {
+          case: updatedCase,
+          requirement: updatedRequirement,
+          event,
+          events: [event],
+        };
         await transaction.appendEvent({ ...event, result });
         return result;
       }),

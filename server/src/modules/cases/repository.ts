@@ -1,4 +1,5 @@
 import type { CaseSnapshot, RequestCaseStatus } from "./types";
+import type { CreateChargeInput, PaymentChargeRecord } from "../payments/types";
 
 export type RequestCaseType = "APPLICATION" | "CERTIFICATE";
 
@@ -7,6 +8,8 @@ export type CaseEventType =
   | "REVIEW_STARTED"
   | "DOCUMENTS_REQUESTED"
   | "DOCUMENTS_SUBMITTED"
+  | "PAYMENT_REQUESTED"
+  | "PAYMENT_CONFIRMED"
   | "REQUIREMENT_CANCELLED"
   | "USER_MESSAGE"
   | "ADMIN_MESSAGE"
@@ -38,6 +41,7 @@ export interface CaseAssetRecord {
   caseId: string;
   assetId: string;
   requirementId?: string;
+  paymentChargeId?: string;
   eventId?: string;
   purpose: "REQUIREMENT_DOCUMENT" | "FINAL_DELIVERABLE";
   label?: string;
@@ -102,4 +106,7 @@ export interface CaseRepository {
   }): Promise<CaseRequirementRecord>;
   listRequirementAssets(requirementId: string): Promise<CaseAssetRecord[]>;
   createCaseAssets(inputs: CaseAssetRecord[]): Promise<CaseAssetRecord[]>;
+  findOpenPaymentRequirement(caseId: string): Promise<CaseRequirementRecord | null>;
+  findRequirementByPaymentCharge(chargeId: string): Promise<CaseRequirementRecord | null>;
+  createPaymentCharge(input: CreateChargeInput): Promise<PaymentChargeRecord>;
 }

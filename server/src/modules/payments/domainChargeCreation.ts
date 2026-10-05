@@ -43,6 +43,25 @@ export const certificateChargeInput = (input: {
   purpose: "Certificate processing charge",
 });
 
+export const caseChargeInput = (input: {
+  userId: string;
+  type: "APPLICATION" | "CERTIFICATE";
+  applicationId?: string;
+  certificateRequestId?: string;
+  category: Extract<PaymentCategory, "INITIAL" | "OBJECTION" | "ADDITIONAL" | "CORRECTION">;
+  amountMinor: number;
+  purpose: string;
+}): CreateChargeInput => ({
+  userId: input.userId,
+  target: input.type === "APPLICATION"
+    ? { type: "APPLICATION", applicationId: input.applicationId ?? "" }
+    : { type: "CERTIFICATE", certificateRequestId: input.certificateRequestId ?? "" },
+  category: input.category,
+  amountMinor: input.amountMinor,
+  currency: "INR",
+  purpose: input.purpose,
+});
+
 export const planChargeInput = (input: {
   userId: string;
   planId: string;

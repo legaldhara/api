@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applicationChargeInput,
+  caseChargeInput,
   certificateChargeInput,
   planChargeInput,
 } from "./domainChargeCreation";
@@ -38,5 +39,20 @@ describe("domain-owned payment charges", () => {
   it("uses the stored plan price", () => {
     expect(planChargeInput({ userId: "user-1", planId: "plan-1", planName: "Premium", price: "999" }))
       .toMatchObject({ amountMinor: 99_900, category: "PLAN" });
+  });
+
+  it("derives a case charge target from the lifecycle authority", () => {
+    expect(caseChargeInput({
+      userId: "user-1",
+      type: "APPLICATION",
+      applicationId: "application-1",
+      category: "ADDITIONAL",
+      amountMinor: 125_000,
+      purpose: "Government filing fee",
+    })).toMatchObject({
+      target: { type: "APPLICATION", applicationId: "application-1" },
+      amountMinor: 125_000,
+      currency: "INR",
+    });
   });
 });
