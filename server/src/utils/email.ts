@@ -279,3 +279,28 @@ The LegalDhara Team
   </div>
   `,
 });
+
+const escapeEmailHtml = (value: string) => value
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#039;");
+
+export const getCaseUpdateEmail = (input: {
+  fullName: string;
+  title: string;
+  body: string;
+  clickAction: string;
+}) => {
+  const appUrl = (process.env.WEBSITE_APP_URL || "https://legaldhara.com").replace(/\/$/, "");
+  const url = `${appUrl}${input.clickAction.startsWith("/") ? input.clickAction : `/${input.clickAction}`}`;
+  const fullName = escapeEmailHtml(input.fullName);
+  const title = escapeEmailHtml(input.title);
+  const body = escapeEmailHtml(input.body);
+  return {
+    subject: input.title,
+    text: `Hi ${input.fullName},\n\n${input.body}\n\nView your request: ${url}\n\nLegalDhara`,
+    html: `<div style="font-family:Arial,sans-serif;color:#151515;line-height:1.6"><h2>${title}</h2><p>Hi ${fullName},</p><p>${body}</p><p><a href="${escapeEmailHtml(url)}">View your request</a></p><p>LegalDhara</p></div>`,
+  };
+};

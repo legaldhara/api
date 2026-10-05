@@ -12,6 +12,7 @@ import { createCaseService } from "./service";
 class MemoryCaseRepository implements CaseRepository {
   cases: RequestCaseRecord[] = [];
   events: CaseEventRecord[] = [];
+  notifications: any[] = [];
 
   async transaction<T>(operation: (repository: CaseRepository) => Promise<T>): Promise<T> {
     const casesBefore = structuredClone(this.cases);
@@ -58,6 +59,10 @@ class MemoryCaseRepository implements CaseRepository {
 
   async findIdempotentEvent(caseId: string, idempotencyKey: string): Promise<CaseEventRecord | null> {
     return this.events.find((event) => event.caseId === caseId && event.idempotencyKey === idempotencyKey) ?? null;
+  }
+
+  async createCaseNotification(input: any): Promise<void> {
+    this.notifications.push(input);
   }
 }
 
@@ -141,5 +146,30 @@ describe("case command service", () => {
 
     expect(second.event.id).toBe(first.event.id);
     expect(repository.events.filter((event) => event.idempotencyKey === "message-1")).toHaveLength(1);
+  });
+
+  it("creates customer notification records with an administrator event", async () => {
+    const repository = new MemoryCaseRepository();
+    const service = createCaseService(repository);
+    const created = await service.createCase({
+      type: "APPLICATION",
+      ownerId: "user-1",
+      applicationId: "application-1",
+      idempotencyKey: "create-app-1",
+    });
+
+    await service.startReview({
+      actor: admin,
+      caseId: created.case.id,
+      expectedVersion: 0,
+      idempotencyKey: "review-1",
+    });
+
+    expect(repository.notifications).toMatchObject([{
+      recipientId: "user-1",
+      eventId: expect.any(String),
+      channels: ["IN_APP", "EMAIL"],
+      templateKey: "case_review_started",
+    }]);
   });
 });

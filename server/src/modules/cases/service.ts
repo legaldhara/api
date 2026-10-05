@@ -13,6 +13,7 @@ import { CaseDomainError, type CaseAction, type CaseActor, type RequestCaseStatu
 import { claimAssetReferences as claimUploadedAssetReferences } from "../../services/uploadedAsset";
 import { caseChargeInput } from "../payments/domainChargeCreation";
 import type { PaymentCategory, PaymentChargeRecord } from "../payments/types";
+import { notificationForCaseEvent } from "./notificationPolicy";
 
 type EventView = Omit<CaseEventRecord, "result">;
 
@@ -167,7 +168,7 @@ export const createCaseService = (
         metadata: acceptsSummary ? { completion: options.applicationCompletionEvidence } : undefined,
       };
       const result: CaseCommandResult = { case: updatedCase, event };
-      await transaction.appendEvent({ ...event, result });
+      await appendEvent(transaction, event, result, updatedCase);
       return result;
     });
 
@@ -182,6 +183,30 @@ export const createCaseService = (
       throw new CaseDomainError("Case changed; refresh and retry", 409, "CASE_VERSION_CONFLICT");
     }
     return { duplicate: null, requestCase };
+  };
+
+  const appendEvent = async (
+    transaction: CaseRepository,
+    event: EventView,
+    result: unknown,
+    requestCase: RequestCaseRecord,
+  ) => {
+    await transaction.appendEvent({ ...event, result });
+    const notification = notificationForCaseEvent({
+      id: event.id,
+      type: event.type,
+      caseId: event.caseId,
+      caseType: requestCase.type,
+      targetId: requestCase.applicationId ?? requestCase.certificateRequestId ?? requestCase.id,
+      ownerId: requestCase.ownerId,
+    });
+    if (notification && transaction.createCaseNotification) {
+      await transaction.createCaseNotification({
+        caseId: event.caseId,
+        eventId: event.id,
+        ...notification,
+      });
+    }
   };
 
   const normalizeText = (value: string, field: string, maximum: number) => {
@@ -234,7 +259,7 @@ export const createCaseService = (
           idempotencyKey: input.idempotencyKey,
         };
         const result: CaseCommandResult = { case: requestCase, event };
-        await transaction.appendEvent({ ...event, result });
+        await appendEvent(transaction, event, result, requestCase);
         return result;
       }),
     startReview: transition({ action: "START_REVIEW", eventType: "REVIEW_STARTED", status: "UNDER_REVIEW" }),
@@ -284,7 +309,7 @@ export const createCaseService = (
           requirementId: requirement.id,
         };
         const result: RequirementResult = { case: updatedCase, requirement, event, events: [event] };
-        await transaction.appendEvent({ ...event, result });
+        await appendEvent(transaction, event, result, updatedCase);
         return result;
       }),
     requestPayment: (input: RequestPaymentCommand): Promise<PaymentRequirementResult> =>
@@ -356,7 +381,7 @@ export const createCaseService = (
           event,
           events: [event],
         };
-        await transaction.appendEvent({ ...event, result });
+        await appendEvent(transaction, event, result, updatedCase);
         return result;
       }),
     recordPaymentSettlement: (input: PaymentSettlementInput): Promise<RequirementResult> =>
@@ -412,7 +437,7 @@ export const createCaseService = (
           event,
           events: [event],
         };
-        await transaction.appendEvent({ ...event, result });
+        await appendEvent(transaction, event, result, updatedCase);
         return result;
       }),
     submitDocuments: (input: SubmitDocumentsCommand): Promise<RequirementResult> =>
@@ -524,7 +549,7 @@ export const createCaseService = (
           event: submittedEvent,
           events,
         };
-        for (const event of events) await transaction.appendEvent({ ...event, result });
+        for (const event of events) await appendEvent(transaction, event, result, updatedCase);
         return result;
       }),
     cancelRequirement: (input: CancelRequirementCommand): Promise<RequirementResult> =>
@@ -593,7 +618,7 @@ export const createCaseService = (
           event: cancelledEvent,
           events,
         };
-        for (const event of events) await transaction.appendEvent({ ...event, result });
+        for (const event of events) await appendEvent(transaction, event, result, updatedCase);
         return result;
       }),
     attachDeliverable: (input: AttachDeliverableCommand): Promise<CaseCommandResult> =>
@@ -638,7 +663,7 @@ export const createCaseService = (
           throw new CaseDomainError("Case changed; refresh and retry", 409, "CASE_VERSION_CONFLICT");
         }
         const result: CaseCommandResult = { case: updatedCase, event };
-        await transaction.appendEvent({ ...event, result });
+        await appendEvent(transaction, event, result, updatedCase);
         return result;
       }),
     approveCase: transition({

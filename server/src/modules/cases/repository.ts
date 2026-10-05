@@ -1,5 +1,6 @@
 import type { CaseSnapshot, RequestCaseStatus } from "./types";
 import type { CreateChargeInput, PaymentChargeRecord } from "../payments/types";
+import type { Prisma } from "@prisma/client";
 
 export type RequestCaseType = "APPLICATION" | "CERTIFICATE";
 
@@ -91,6 +92,17 @@ export interface CaseEventRecord {
 
 export type AppendCaseEventInput = CaseEventRecord;
 
+export interface CreateCaseNotificationInput {
+  caseId: string;
+  eventId: string;
+  recipientId: string;
+  channels: ["IN_APP", "EMAIL"];
+  title: string;
+  body: string;
+  templateKey: string;
+  clickAction: string;
+}
+
 export interface CaseRepository {
   transaction<T>(operation: (repository: CaseRepository) => Promise<T>): Promise<T>;
   loadCase(caseId: string): Promise<RequestCaseRecord | null>;
@@ -109,4 +121,34 @@ export interface CaseRepository {
   findOpenPaymentRequirement(caseId: string): Promise<CaseRequirementRecord | null>;
   findRequirementByPaymentCharge(chargeId: string): Promise<CaseRequirementRecord | null>;
   createPaymentCharge(input: CreateChargeInput): Promise<PaymentChargeRecord>;
+  createCaseNotification?(input: CreateCaseNotificationInput): Promise<void>;
 }
+
+export const createPrismaCaseNotification = async (
+  client: Pick<Prisma.TransactionClient, "notification" | "notificationRead" | "notificationOutbox">,
+  input: CreateCaseNotificationInput,
+): Promise<void> => {
+  const notification = await client.notification.create({
+    data: {
+      title: input.title,
+      body: input.body,
+      role: "USER",
+      audienceType: "SPECIFIC",
+      notificationType: input.templateKey,
+      clickAction: input.clickAction,
+      caseEventId: input.eventId,
+    },
+  });
+  await client.notificationRead.create({
+    data: { notificationId: notification.id, userId: input.recipientId, isRead: false },
+  });
+  await client.notificationOutbox.create({
+    data: {
+      caseId: input.caseId,
+      eventId: input.eventId,
+      recipientId: input.recipientId,
+      channel: "EMAIL",
+      templateKey: input.templateKey,
+    },
+  });
+};
