@@ -14,6 +14,9 @@ import { AssetAccessError, claimAssetReferences, createAssetRepository, extractA
 import { createCharge } from "../modules/payments/chargeService";
 import { applicationChargeInput } from "../modules/payments/domainChargeCreation";
 import { createPaymentChargeRepository } from "../modules/payments/repository";
+import { createPrismaCaseNotification } from "../modules/cases/repository";
+import { serializeLifecycle } from "../modules/cases/serializer";
+import { verifyMfaProof } from "../services/adminMfa";
 
 export const createApplication = async (
   req: Request,
@@ -102,6 +105,53 @@ export const createApplication = async (
         governmentCharges: service.governmentCharges ?? 0,
         category: "INITIAL",
       }), { repository: createPaymentChargeRepository(tx) });
+      const requestCase = await tx.requestCase.create({
+        data: { type: "APPLICATION", ownerId: user.id, applicationId: newApplication.id, status: "ACTION_REQUIRED", version: 1 },
+      });
+      await tx.caseEvent.create({
+        data: {
+          caseId: requestCase.id,
+          type: "CASE_SUBMITTED",
+          previousStatus: "SUBMITTED",
+          newStatus: "SUBMITTED",
+          idempotencyKey: `create:${newApplication.id}`,
+          result: { caseId: requestCase.id },
+        },
+      });
+      const requirement = await tx.caseRequirement.create({
+        data: {
+          caseId: requestCase.id,
+          type: "PAYMENT",
+          status: "OPEN",
+          createdBy: user.id,
+          title: "Initial payment required",
+          instructions: charge.purpose,
+          documentLabels: [],
+          paymentChargeId: charge.id,
+        },
+      });
+      const paymentEvent = await tx.caseEvent.create({
+        data: {
+          caseId: requestCase.id,
+          type: "PAYMENT_REQUESTED",
+          previousStatus: "SUBMITTED",
+          newStatus: "ACTION_REQUIRED",
+          requirementId: requirement.id,
+          paymentChargeId: charge.id,
+          idempotencyKey: `initial-payment:${charge.id}`,
+          result: { caseId: requestCase.id, requirementId: requirement.id, chargeId: charge.id },
+        },
+      });
+      await createPrismaCaseNotification(tx, {
+        caseId: requestCase.id,
+        eventId: paymentEvent.id,
+        recipientId: user.id,
+        channels: ["IN_APP", "EMAIL"],
+        title: "Payment required",
+        body: "An initial payment is required to continue processing your request.",
+        templateKey: "case_payment_requested",
+        clickAction: `/dashboard/cases/${requestCase.id}`,
+      });
       return { newApplication, charge };
     });
 
@@ -260,6 +310,7 @@ export const getApplicationById = async (
             createdAt: true,
           },
         },
+        requestCase: { select: { id: true } },
       },
     });
 
@@ -298,6 +349,14 @@ export const getApplicationById = async (
 
 
 
+    const lifecycle = application.requestCase
+      ? await serializeLifecycle(application.requestCase.id, {
+          id: user.id,
+          role: user.role,
+          ownsCase: application.userId === user.id,
+          mfaVerified: user.role !== "USER" && verifyMfaProof(req.cookies?.["__Host-admin_mfa"] || "", user.uid),
+        })
+      : null;
     const structuredResponse = {
       ticketNo: application.ticketNo,
       applicationStatus: application.applicationStatus,
@@ -315,12 +374,14 @@ export const getApplicationById = async (
 
       paymentHistory: application.paymentCharges,
       updateHistory: application.updates,
+      lifecycle,
     };
 
     return res.status(200).json({
       success: true,
       message: "Application details fetched successfully",
       data: structuredResponse,
+      lifecycle,
     });
   } catch (err: any) {
     console.error("Get Application Error:", err.message);

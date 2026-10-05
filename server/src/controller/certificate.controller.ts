@@ -13,6 +13,8 @@ import { AssetAccessError, claimAssetReferences, createAssetRepository } from ".
 import { createCharge } from "../modules/payments/chargeService";
 import { certificateChargeInput } from "../modules/payments/domainChargeCreation";
 import { createPaymentChargeRepository } from "../modules/payments/repository";
+import { serializeLifecycle } from "../modules/cases/serializer";
+import { verifyMfaProof } from "../services/adminMfa";
 
 export const createCertificateRequest = async (req: Request, res: Response) => {
   try {
@@ -73,26 +75,40 @@ export const createCertificateRequest = async (req: Request, res: Response) => {
     // ✅ Create new request
     const requestNo = generateTicketNumber("CER");
 
-    const newRequest = await prisma.certificateRequest.create({
-      data: {
-        requestNo,
-        userId: user.id,
-        subject,
-        description,
-        status: CertificateRequestStatus.UNDER_REVIEW,
-      },
-    });
-
-    // Create initial update record (handles payment info)
-    await prisma.certificateUpdate.create({
-      data: {
-        certificateRequestId: newRequest.id,
-        updatedBy: user.id,
-        prevStatus: CertificateRequestStatus.PENDING,
-        newStatus: CertificateRequestStatus.UNDER_REVIEW,
-        message: `Application submitted. Under review.`,
-        updateType: CertificateUpdateType.SYSTEM_GENERATED, // later can switch to SYSTEM_GENERATED
-      },
+    const newRequest = await prisma.$transaction(async (transaction) => {
+      const created = await transaction.certificateRequest.create({
+        data: {
+          requestNo,
+          userId: user.id,
+          subject,
+          description,
+          status: CertificateRequestStatus.UNDER_REVIEW,
+        },
+      });
+      await transaction.certificateUpdate.create({
+        data: {
+          certificateRequestId: created.id,
+          updatedBy: user.id,
+          prevStatus: CertificateRequestStatus.PENDING,
+          newStatus: CertificateRequestStatus.UNDER_REVIEW,
+          message: `Application submitted. Under review.`,
+          updateType: CertificateUpdateType.SYSTEM_GENERATED,
+        },
+      });
+      const requestCase = await transaction.requestCase.create({
+        data: { type: "CERTIFICATE", ownerId: user.id, certificateRequestId: created.id },
+      });
+      await transaction.caseEvent.create({
+        data: {
+          caseId: requestCase.id,
+          type: "CASE_SUBMITTED",
+          previousStatus: "SUBMITTED",
+          newStatus: "SUBMITTED",
+          idempotencyKey: `create:${created.id}`,
+          result: { caseId: requestCase.id },
+        },
+      });
+      return created;
     });
 
     await Notification.createAdminNotification({
@@ -317,6 +333,7 @@ export const getCertificateRequestByRequestNo = async (req: Request, res: Respon
             createdAt: true,
           },
         },
+        requestCase: { select: { id: true } },
       },
     });
 
@@ -353,6 +370,14 @@ export const getCertificateRequestByRequestNo = async (req: Request, res: Respon
     const latestUpdate = certificateRequest.updates[0] || null;
 
     // ✅ Safe structured response
+    const lifecycle = certificateRequest.requestCase
+      ? await serializeLifecycle(certificateRequest.requestCase.id, {
+          id: user.id,
+          role: user.role,
+          ownsCase: certificateRequest.userId === user.id,
+          mfaVerified: user.role !== "USER" && verifyMfaProof(req.cookies?.["__Host-admin_mfa"] || "", user.uid),
+        })
+      : null;
     const structuredResponse = {
       requestNo: certificateRequest.requestNo,
       subject: certificateRequest.subject,
@@ -371,12 +396,14 @@ export const getCertificateRequestByRequestNo = async (req: Request, res: Respon
       userDetails: certificateRequest.user,
       paymentHistory: certificateRequest.paymentCharges,
       updateHistory: certificateRequest.updates,
+      lifecycle,
     };
 
     return res.status(200).json({
       success: true,
       message: "Certificate request fetched successfully",
       data: structuredResponse,
+      lifecycle,
     });
   } catch (err: any) {
     console.error("Get Certificate Request Error:", err.message);
