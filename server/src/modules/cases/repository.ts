@@ -5,12 +5,43 @@ export type RequestCaseType = "APPLICATION" | "CERTIFICATE";
 export type CaseEventType =
   | "CASE_SUBMITTED"
   | "REVIEW_STARTED"
+  | "DOCUMENTS_REQUESTED"
+  | "DOCUMENTS_SUBMITTED"
+  | "REQUIREMENT_CANCELLED"
   | "USER_MESSAGE"
   | "ADMIN_MESSAGE"
   | "CASE_APPROVED"
   | "CASE_REJECTED"
+  | "DELIVERABLE_ATTACHED"
   | "CASE_COMPLETED"
   | "CASE_CLOSED";
+
+export interface CaseRequirementRecord {
+  id: string;
+  caseId: string;
+  type: "DOCUMENT" | "PAYMENT";
+  status: "OPEN" | "FULFILLED" | "CANCELLED";
+  createdBy: string;
+  title: string;
+  instructions: string;
+  documentLabels: string[];
+  fulfilledBy?: string;
+  fulfilledAt?: Date;
+  cancelledBy?: string;
+  cancelledAt?: Date;
+  cancellationReason?: string;
+  paymentChargeId?: string;
+}
+
+export interface CaseAssetRecord {
+  id: string;
+  caseId: string;
+  assetId: string;
+  requirementId?: string;
+  eventId?: string;
+  purpose: "REQUIREMENT_DOCUMENT" | "FINAL_DELIVERABLE";
+  label?: string;
+}
 
 export interface RequestCaseRecord extends CaseSnapshot {
   id: string;
@@ -49,6 +80,8 @@ export interface CaseEventRecord {
   previousStatus: RequestCaseStatus;
   newStatus: RequestCaseStatus;
   idempotencyKey: string;
+  requirementId?: string;
+  metadata?: Record<string, unknown>;
   result: unknown;
 }
 
@@ -61,4 +94,12 @@ export interface CaseRepository {
   updateStatus(input: UpdateCaseStatusInput): Promise<RequestCaseRecord | null>;
   appendEvent(input: AppendCaseEventInput): Promise<CaseEventRecord>;
   findIdempotentEvent(caseId: string, idempotencyKey: string): Promise<CaseEventRecord | null>;
+  createRequirement(input: Omit<CaseRequirementRecord, "status">): Promise<CaseRequirementRecord>;
+  loadRequirement(requirementId: string): Promise<CaseRequirementRecord | null>;
+  updateRequirement(input: {
+    requirementId: string;
+    changes: Partial<Omit<CaseRequirementRecord, "id" | "caseId" | "type" | "createdBy">>;
+  }): Promise<CaseRequirementRecord>;
+  listRequirementAssets(requirementId: string): Promise<CaseAssetRecord[]>;
+  createCaseAssets(inputs: CaseAssetRecord[]): Promise<CaseAssetRecord[]>;
 }

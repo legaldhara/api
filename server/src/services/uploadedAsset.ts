@@ -46,7 +46,11 @@ export interface ManagedAssetRepository extends AssetRepository {
 }
 
 export class AssetAccessError extends Error {
-  constructor(message: string, readonly statusCode: number) {
+  constructor(
+    message: string,
+    readonly statusCode: number,
+    readonly code: string = "ASSET_ACCESS_ERROR",
+  ) {
     super(message);
   }
 }
@@ -99,7 +103,7 @@ export const claimUploadedAsset = async (
   const asset = await requireTemporaryAsset(input.assetId, deps.repository);
   const isAdministrator = input.actor.role === "ADMIN" || input.actor.role === "COADMIN";
   if (asset.ownerId !== input.actor.id && !isAdministrator) {
-    throw new AssetAccessError("Uploaded asset belongs to another account", 403);
+    throw new AssetAccessError("Uploaded asset belongs to another account", 403, "ASSET_NOT_OWNED");
   }
   return deps.repository.claim({ id: asset.id, context: input.context, referenceId: input.referenceId, attachedAt: deps.now() });
 };
