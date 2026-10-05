@@ -498,8 +498,6 @@ export const createCaseService = (
           purpose: "REQUIREMENT_DOCUMENT",
           label: asset.label.trim(),
         }));
-        await transaction.createCaseAssets(caseAssets);
-
         const fulfilled = requirement.documentLabels.every(
           (label) => existingLabels.has(label) || submittedLabels.includes(label),
         );
@@ -554,6 +552,7 @@ export const createCaseService = (
           events,
         };
         for (const event of events) await appendEvent(transaction, event, result, updatedCase);
+        await transaction.createCaseAssets(caseAssets);
         return result;
       }),
     cancelRequirement: (input: CancelRequirementCommand): Promise<RequirementResult> =>
@@ -648,16 +647,14 @@ export const createCaseService = (
           newStatus: requestCase.status,
           idempotencyKey: input.idempotencyKey,
         };
-        await transaction.createCaseAssets([
-          {
-            id: dependencies.id(),
-            caseId: input.caseId,
-            assetId: input.assetId,
-            eventId: event.id,
-            purpose: "FINAL_DELIVERABLE",
-            label: input.label ? normalizeText(input.label, "Deliverable label", 120) : undefined,
-          },
-        ]);
+        const deliverable = {
+          id: dependencies.id(),
+          caseId: input.caseId,
+          assetId: input.assetId,
+          eventId: event.id,
+          purpose: "FINAL_DELIVERABLE" as const,
+          label: input.label ? normalizeText(input.label, "Deliverable label", 120) : undefined,
+        };
         const updatedCase = await transaction.updateStatus({
           caseId: input.caseId,
           expectedVersion: input.expectedVersion,
@@ -668,6 +665,7 @@ export const createCaseService = (
         }
         const result: CaseCommandResult = { case: updatedCase, event };
         await appendEvent(transaction, event, result, updatedCase);
+        await transaction.createCaseAssets([deliverable]);
         return result;
       }),
     approveCase: transition({
