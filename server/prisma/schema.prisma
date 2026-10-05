@@ -39,6 +39,12 @@ model User {
   adminSecurity       AdminSecurity?
   uploadedAssets      UploadedAsset[]
   adminInvitation     AdminInvitation?
+  requestCases        RequestCase[]          @relation("CaseOwner")
+  caseEvents          CaseEvent[]            @relation("CaseEventActor")
+  caseRequirementsCreated   CaseRequirement[] @relation("CaseRequirementCreatedBy")
+  caseRequirementsFulfilled CaseRequirement[] @relation("CaseRequirementFulfilledBy")
+  caseRequirementsCancelled CaseRequirement[] @relation("CaseRequirementCancelledBy")
+  notificationOutbox  NotificationOutbox[]   @relation("OutboxRecipient")
 }
 
 model AdminSecurity {
@@ -107,6 +113,7 @@ model UploadedAsset {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   owner        User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  caseAssets   CaseAsset[]
 
   @@index([ownerId, status])
   @@index([context, referenceId])
@@ -168,6 +175,7 @@ model Application {
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   updates           ApplicationUpdate[]
   paymentCharges    PaymentCharge[]
+  requestCase       RequestCase?
 }
 
 model ApplicationUpdate {
@@ -241,6 +249,8 @@ model PaymentCharge {
   attempts                  PaymentAttempt[]    @relation("ChargeAttempts")
   paidAttempt               PaymentAttempt?     @relation("PaidAttempt", fields: [paidAttemptId], references: [id], onDelete: Restrict)
   refunds                   PaymentRefund[]
+  caseRequirement           CaseRequirement?
+  caseEvents                CaseEvent[]
 
   @@index([userId, createdAt])
   @@index([applicationId])
@@ -361,7 +371,11 @@ model Notification {
   notificationType String             @default("general")
   clickAction      String             @default("")
   createdAt        DateTime           @default(now())
+  caseEventId      String?            @db.Uuid
+  caseEvent        CaseEvent?         @relation(fields: [caseEventId], references: [id], onDelete: SetNull)
   reads            NotificationRead[]
+
+  @@index([caseEventId])
 }
 
 model NotificationRead {
@@ -401,6 +415,7 @@ model CertificateRequest {
   user           User                     @relation("UserCertificateRequests", fields: [userId], references: [id], onDelete: Cascade)
   updates        CertificateUpdate[]      // All messages & admin updates
   paymentCharges PaymentCharge[]
+  requestCase    RequestCase?
 }
 
 model CertificateUpdate {
@@ -420,6 +435,138 @@ model CertificateUpdate {
   certificateRequest    CertificateRequest  @relation(fields: [certificateRequestId], references: [id], onDelete: Cascade)
   updater               User                @relation("UserCertificateUpdates", fields: [updatedBy], references: [id], onDelete: Cascade)
   sourcePaymentCharge   PaymentCharge?
+}
+
+model RequestCase {
+  id                     String              @id @default(uuid()) @db.Uuid
+  type                   RequestCaseType
+  ownerId                String              @db.Uuid
+  applicationId          String?              @unique @db.Uuid
+  certificateRequestId   String?              @unique @db.Uuid
+  status                 RequestCaseStatus   @default(SUBMITTED)
+  version                Int                  @default(0)
+  submittedAt            DateTime             @default(now())
+  approvedAt             DateTime?
+  rejectedAt             DateTime?
+  completedAt            DateTime?
+  closedAt               DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  owner                  User                 @relation("CaseOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  application            Application?         @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  certificateRequest     CertificateRequest?  @relation(fields: [certificateRequestId], references: [id], onDelete: Restrict)
+  events                 CaseEvent[]
+  requirements           CaseRequirement[]
+  assets                 CaseAsset[]
+  outbox                 NotificationOutbox[]
+
+  @@index([ownerId, createdAt])
+  @@index([status, updatedAt])
+}
+
+model CaseEvent {
+  id               String             @id @default(uuid()) @db.Uuid
+  caseId           String             @db.Uuid
+  actorId          String?            @db.Uuid
+  actorRoleSnapshot Role?
+  type             CaseEventType
+  message          String?
+  previousStatus   RequestCaseStatus
+  newStatus        RequestCaseStatus
+  metadata         Json?
+  requirementId    String?            @db.Uuid
+  paymentChargeId  String?            @db.Uuid
+  idempotencyKey   String
+  result           Json?
+  createdAt        DateTime           @default(now())
+  requestCase      RequestCase        @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  actor            User?              @relation("CaseEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  requirement      CaseRequirement?   @relation(fields: [requirementId], references: [id], onDelete: Restrict)
+  paymentCharge    PaymentCharge?     @relation(fields: [paymentChargeId], references: [id], onDelete: Restrict)
+  assets           CaseAsset[]
+  notifications    Notification[]
+  outbox           NotificationOutbox[]
+
+  @@unique([caseId, idempotencyKey])
+  @@index([caseId, createdAt])
+  @@index([requirementId])
+  @@index([paymentChargeId])
+}
+
+model CaseRequirement {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  caseId             String                  @db.Uuid
+  type               CaseRequirementType
+  status             CaseRequirementStatus   @default(OPEN)
+  createdBy          String                  @db.Uuid
+  title              String
+  instructions       String
+  documentLabels     String[]
+  dueAt              DateTime?
+  fulfilledBy        String?                 @db.Uuid
+  fulfilledAt        DateTime?
+  cancelledBy        String?                 @db.Uuid
+  cancelledAt        DateTime?
+  cancellationReason String?
+  paymentChargeId    String?                 @unique @db.Uuid
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  requestCase        RequestCase             @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  creator            User                    @relation("CaseRequirementCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  fulfiller          User?                   @relation("CaseRequirementFulfilledBy", fields: [fulfilledBy], references: [id], onDelete: Restrict)
+  canceller          User?                   @relation("CaseRequirementCancelledBy", fields: [cancelledBy], references: [id], onDelete: Restrict)
+  paymentCharge      PaymentCharge?          @relation(fields: [paymentChargeId], references: [id], onDelete: Restrict)
+  events             CaseEvent[]
+  assets             CaseAsset[]
+
+  @@index([caseId, status])
+  @@index([createdBy])
+  @@index([fulfilledBy])
+  @@index([cancelledBy])
+}
+
+model CaseAsset {
+  id            String           @id @default(uuid()) @db.Uuid
+  caseId        String           @db.Uuid
+  assetId       String           @unique @db.Uuid
+  requirementId String?          @db.Uuid
+  eventId       String?          @db.Uuid
+  purpose       CaseAssetPurpose
+  label         String?
+  createdAt     DateTime         @default(now())
+  requestCase   RequestCase      @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  asset         UploadedAsset    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  requirement   CaseRequirement? @relation(fields: [requirementId], references: [id], onDelete: Restrict)
+  event         CaseEvent?       @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  @@index([caseId, purpose])
+  @@index([requirementId])
+  @@index([eventId])
+}
+
+model NotificationOutbox {
+  id            String               @id @default(uuid()) @db.Uuid
+  caseId        String               @db.Uuid
+  eventId       String               @db.Uuid
+  recipientId   String               @db.Uuid
+  channel       NotificationChannel
+  templateKey   String
+  status        OutboxDeliveryStatus @default(PENDING)
+  attemptCount  Int                  @default(0)
+  availableAt   DateTime             @default(now())
+  leaseUntil    DateTime?
+  sentAt        DateTime?
+  failureReason String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  requestCase   RequestCase          @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  event         CaseEvent            @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  recipient     User                 @relation("OutboxRecipient", fields: [recipientId], references: [id], onDelete: Restrict)
+
+  @@unique([eventId, recipientId, channel, templateKey])
+  @@index([status, availableAt])
+  @@index([caseId, createdAt])
+  @@index([recipientId, createdAt])
 }
 
 
@@ -444,6 +591,66 @@ enum AssetContext {
   DOCUMENT
   APPLICATION_UPDATE
   CERTIFICATE_UPDATE
+  CASE
+}
+
+enum RequestCaseType {
+  APPLICATION
+  CERTIFICATE
+}
+
+enum RequestCaseStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ACTION_REQUIRED
+  APPROVED
+  REJECTED
+  COMPLETED
+  CLOSED
+}
+
+enum CaseEventType {
+  CASE_SUBMITTED
+  REVIEW_STARTED
+  DOCUMENTS_REQUESTED
+  DOCUMENTS_SUBMITTED
+  PAYMENT_REQUESTED
+  PAYMENT_CONFIRMED
+  USER_MESSAGE
+  ADMIN_MESSAGE
+  CASE_APPROVED
+  CASE_REJECTED
+  DELIVERABLE_ATTACHED
+  CASE_COMPLETED
+  CASE_CLOSED
+  REQUIREMENT_CANCELLED
+}
+
+enum CaseRequirementType {
+  DOCUMENT
+  PAYMENT
+}
+
+enum CaseRequirementStatus {
+  OPEN
+  FULFILLED
+  CANCELLED
+}
+
+enum CaseAssetPurpose {
+  REQUIREMENT_DOCUMENT
+  FINAL_DELIVERABLE
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+}
+
+enum OutboxDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
 }
 
 enum InvitationDeliveryStatus {
