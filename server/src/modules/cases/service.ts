@@ -67,6 +67,10 @@ interface CompleteCaseCommand extends CommandBase {
   completionReference?: string;
 }
 
+interface RejectCaseCommand extends CommandBase {
+  reason: string;
+}
+
 interface RequestPaymentCommand extends CommandBase {
   category: Exclude<PaymentCategory, "PLAN">;
   amountMinor: number;
@@ -672,12 +676,17 @@ export const createCaseService = (
       status: "APPROVED",
       timestamp: "approvedAt",
     }),
-    rejectCase: transition({
-      action: "REJECT",
-      eventType: "CASE_REJECTED",
-      status: "REJECTED",
-      timestamp: "rejectedAt",
-    }),
+    rejectCase: (input: RejectCaseCommand): Promise<CaseCommandResult> =>
+      execute(
+        input,
+        {
+          action: "REJECT",
+          eventType: "CASE_REJECTED",
+          status: "REJECTED",
+          timestamp: "rejectedAt",
+        },
+        normalizeText(input.reason, "Rejection reason", 1_000),
+      ),
     completeCase: (input: CompleteCaseCommand): Promise<CaseCommandResult> => {
       const hasSummaryInput = input.completionSummary !== undefined || input.completionReference !== undefined;
       let completionEvidence: { summary: string; reference: string } | undefined;
