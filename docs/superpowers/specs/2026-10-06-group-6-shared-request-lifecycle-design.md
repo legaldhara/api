@@ -329,7 +329,7 @@ No controller edits earlier events. No delete route removes case events, require
 9. Run local integration and end-to-end tests.
 10. Deploy API first, then admin, then website.
 
-The first API deployment keeps existing read routes compatible. Production uses an empty workflow database, so no backfill runs. Rollback restores the previous API image and frontend builds before new production cases are accepted; schema additions remain harmless if rollback is required.
+The first API deployment keeps existing read routes compatible. Production uses an empty workflow database, so no backfill runs. The legacy-column cleanup is destructive and requires a maintenance window plus a database backup. If validation fails before traffic resumes, restore that backup and the previous API and frontend images together. After traffic resumes on the new schema, roll forward with a corrected Group 6 API image rather than starting the pre-Group 6 API against the cleaned schema.
 
 ## Testing
 
