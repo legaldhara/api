@@ -41,7 +41,6 @@ export interface CaseAssetRecord {
   caseId: string;
   assetId: string;
   requirementId?: string;
-  paymentChargeId?: string;
   eventId?: string;
   purpose: "REQUIREMENT_DOCUMENT" | "FINAL_DELIVERABLE";
   label?: string;
@@ -85,6 +84,7 @@ export interface CaseEventRecord {
   newStatus: RequestCaseStatus;
   idempotencyKey: string;
   requirementId?: string;
+  paymentChargeId?: string;
   metadata?: Record<string, unknown>;
   result: unknown;
 }
