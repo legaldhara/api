@@ -1,14 +1,29 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const readScript = (name: string) => readFileSync(`../deploy/scripts/${name}`, "utf8");
+const scriptNames = ["backup-postgres.sh", "verify-backup.sh", "deploy.sh", "validate.sh"];
 
 describe("production deployment scripts", () => {
   it("uses strict shell settings for every operation", () => {
-    for (const name of ["backup-postgres.sh", "verify-backup.sh", "deploy.sh", "validate.sh"]) {
+    for (const name of scriptNames) {
       const script = readScript(name);
       expect(script).toMatch(/^#!\/usr\/bin\/env bash\nset -Eeuo pipefail/);
     }
+  });
+
+  it("tracks every deployment script as executable", () => {
+    const repository = resolve("..");
+    const safeDirectory = repository.replaceAll("\\", "/");
+    const output = execFileSync(
+      "git",
+      ["-c", `safe.directory=${safeDirectory}`, "ls-files", "--stage", ...scriptNames.map((name) => `deploy/scripts/${name}`)],
+      { cwd: repository, encoding: "utf8" },
+    );
+
+    for (const line of output.trim().split(/\r?\n/)) expect(line).toMatch(/^100755 /);
   });
 
   it("backs up before a locked exact-SHA migration and health check", () => {
