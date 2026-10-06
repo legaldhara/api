@@ -3,18 +3,10 @@ import { PaymentDomainError } from "./chargeService";
 import { PaymentChargeRecord } from "./types";
 
 export interface PaymentTargetRepository {
-  advanceApplication(input: {
-    applicationId: string;
-    sourceUpdateId: string | null;
+  fulfilCasePayment(input: {
+    chargeId: string;
     attemptId: string;
-    allowedCurrentStatuses: string[];
-  }, transaction: unknown): Promise<boolean>;
-  advanceCertificate(input: {
-    certificateRequestId: string;
-    sourceUpdateId: string | null;
-    attemptId: string;
-    allowedCurrentStatuses: string[];
-  }, transaction: unknown): Promise<boolean>;
+  }, transaction: unknown): Promise<void>;
   activatePlan(input: {
     userId: string;
     planId: string;
@@ -24,41 +16,60 @@ export interface PaymentTargetRepository {
 }
 
 const prismaTargetRepository: PaymentTargetRepository = {
-  async advanceApplication(input, transaction) {
+  async fulfilCasePayment(input, transaction) {
     const tx = transaction as Prisma.TransactionClient;
-    const result = await tx.application.updateMany({
-      where: {
-        id: input.applicationId,
-        deletedAt: null,
-        applicationStatus: { in: input.allowedCurrentStatuses as never[] },
+    const requirement = await tx.caseRequirement.findUnique({
+      where: { paymentChargeId: input.chargeId },
+      include: {
+        requestCase: {
+          include: {
+            _count: { select: { requirements: { where: { status: "OPEN" } } } },
+          },
+        },
       },
-      data: { applicationStatus: "UNDER_REVIEW" },
     });
-    if (result.count === 1 && input.sourceUpdateId) {
-      await tx.applicationUpdate.updateMany({
-        where: { id: input.sourceUpdateId, applicationId: input.applicationId },
-        data: { pendingPayment: false, paymentId: input.attemptId },
-      });
+    if (!requirement || requirement.type !== "PAYMENT") {
+      throw new PaymentDomainError("Payment requirement not found", 409, "PAYMENT_REQUIREMENT_NOT_FOUND");
     }
-    return result.count === 1;
-  },
-  async advanceCertificate(input, transaction) {
-    const tx = transaction as Prisma.TransactionClient;
-    const result = await tx.certificateRequest.updateMany({
-      where: {
-        id: input.certificateRequestId,
-        deletedAt: null,
-        status: { in: input.allowedCurrentStatuses as never[] },
+    const idempotencyKey = `payment:${input.attemptId}`;
+    const duplicate = await tx.caseEvent.findUnique({
+      where: { caseId_idempotencyKey: { caseId: requirement.caseId, idempotencyKey } },
+    });
+    if (duplicate) return;
+    if (requirement.status !== "OPEN") {
+      throw new PaymentDomainError("Payment requirement is not open", 409, "REQUIREMENT_NOT_OPEN");
+    }
+
+    const now = new Date();
+    await tx.caseRequirement.update({
+      where: { id: requirement.id },
+      data: { status: "FULFILLED", fulfilledAt: now },
+    });
+    const nextStatus = requirement.requestCase._count.requirements === 1 ? "UNDER_REVIEW" : "ACTION_REQUIRED";
+    const updated = await tx.requestCase.updateMany({
+      where: { id: requirement.caseId, version: requirement.requestCase.version },
+      data: { status: nextStatus, version: { increment: 1 } },
+    });
+    if (updated.count !== 1) {
+      throw new PaymentDomainError("Case changed; settlement must be retried", 409, "CASE_VERSION_CONFLICT");
+    }
+    await tx.caseEvent.create({
+      data: {
+        caseId: requirement.caseId,
+        type: "PAYMENT_CONFIRMED",
+        previousStatus: requirement.requestCase.status,
+        newStatus: nextStatus,
+        requirementId: requirement.id,
+        paymentChargeId: input.chargeId,
+        idempotencyKey,
+        metadata: { attemptId: input.attemptId },
+        result: {
+          caseId: requirement.caseId,
+          requirementId: requirement.id,
+          status: nextStatus,
+        },
       },
-      data: { status: "UNDER_REVIEW", pendingPayment: false },
     });
-    if (result.count === 1 && input.sourceUpdateId) {
-      await tx.certificateUpdate.updateMany({
-        where: { id: input.sourceUpdateId, certificateRequestId: input.certificateRequestId },
-        data: { transactionId: input.attemptId, chargesRequired: 0 },
-      });
-    }
-    return result.count === 1;
   },
   async activatePlan(input, transaction) {
     const tx = transaction as Prisma.TransactionClient;
@@ -95,22 +106,11 @@ export const createPaymentTargetAdapter = (
   repository: PaymentTargetRepository = prismaTargetRepository,
 ): PaymentTargetAdapter => ({
   async applyPaidCharge(charge, attemptId, transaction) {
-    if (charge.targetType === "APPLICATION" && charge.applicationId) {
-      await repository.advanceApplication({
-        applicationId: charge.applicationId,
-        sourceUpdateId: charge.sourceApplicationUpdateId,
-        attemptId,
-        allowedCurrentStatuses: ["AWAITING_ACTION", "PAYMENT_REQUIRED", "PAYMENT_DONE", "DATA_REQUIRED", "UNDER_REVIEW"],
-      }, transaction);
-      return;
-    }
-    if (charge.targetType === "CERTIFICATE" && charge.certificateRequestId) {
-      await repository.advanceCertificate({
-        certificateRequestId: charge.certificateRequestId,
-        sourceUpdateId: charge.sourceCertificateUpdateId,
-        attemptId,
-        allowedCurrentStatuses: ["PENDING", "PAYMENT_REQUIRED", "UNDER_REVIEW", "APPROVED"],
-      }, transaction);
+    if (
+      (charge.targetType === "APPLICATION" && charge.applicationId) ||
+      (charge.targetType === "CERTIFICATE" && charge.certificateRequestId)
+    ) {
+      await repository.fulfilCasePayment({ chargeId: charge.id, attemptId }, transaction);
       return;
     }
     if (charge.targetType === "PLAN" && charge.planId) {

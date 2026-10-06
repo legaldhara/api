@@ -19,6 +19,7 @@ import queryRouter from "./routes/query.route";
 import serviceRouter from "./routes/service.route";
 import userRouter from "./routes/user.route";
 import { requestLogger } from "./utils/logger";
+import caseRouter from "./modules/cases/case.route";
 
 interface AppDependencies {
   readinessProbe(): Promise<void>;
@@ -60,6 +61,7 @@ export const createApp = (overrides: Partial<AppDependencies> = {}): Express => 
   app.use("/api/v1/user", userRouter);
   app.use("/api/v1/query", queryRouter);
   app.use("/api/v1/payments", paymentRouter);
+  app.use("/api/v1/cases", caseRouter);
   app.use("/api/v1/mail", mailRouter);
   app.use("/api/v1/media", mediaRouter);
   app.use("/api/v1/plan", planRouter);

@@ -7,6 +7,7 @@ import { configCorsOrigins } from "./config/cors";
 import { verifyFirebaseIdToken } from "./config/firebase";
 import { verifyMfaProof } from "./services/adminMfa";
 import { startPaymentReconciliationJob, stopPaymentReconciliationJob } from "./modules/payments/reconciliationJob";
+import { startCaseEmailOutboxJob, stopCaseEmailOutboxJob } from "./modules/cases/outboxWorker";
 
 export const startServer = async (): Promise<http.Server> => {
   const server = http.createServer(createApp());
@@ -24,12 +25,14 @@ export const startServer = async (): Promise<http.Server> => {
   });
   io.on("connection", (socket) => { void socket.join("ADMINS"); });
   startPaymentReconciliationJob();
+  startCaseEmailOutboxJob();
   await new Promise<void>((resolve) => server.listen(Number(process.env.PORT || 4001), resolve));
   return server;
 };
 
 export const stopServer = async (server: http.Server): Promise<void> => {
   stopPaymentReconciliationJob();
+  stopCaseEmailOutboxJob();
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   await prisma.$disconnect();
 };

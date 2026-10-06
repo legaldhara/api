@@ -19,6 +19,28 @@ describe("production deployment scripts", () => {
     expect(script).toContain("/health");
   });
 
+  it("pauses traffic and verifies the backup before migrating", () => {
+    const script = readScript("deploy.sh");
+    const stopTraffic = script.indexOf("compose stop caddy");
+    const backup = script.indexOf("backup-postgres.sh\" predeploy");
+    const verify = script.indexOf("verify-backup.sh\" \"$BACKUP_FILE\"");
+    const migrate = script.indexOf("compose run --rm migrate");
+
+    expect(stopTraffic).toBeGreaterThan(-1);
+    expect(stopTraffic).toBeLessThan(backup);
+    expect(backup).toBeLessThan(verify);
+    expect(verify).toBeLessThan(migrate);
+  });
+
+  it("fails closed after migration instead of starting the previous API", () => {
+    const script = readScript("deploy.sh");
+    expect(script).toContain('DEPLOY_PHASE="migration_started"');
+    expect(script).toContain("Database migrations may have been applied");
+    expect(script).toContain("compose stop caddy");
+    expect(script).toContain("http://127.0.0.1:4001/health");
+    expect(script).not.toContain('export IMAGE_TAG="$PREVIOUS_SHA"');
+  });
+
   it("creates PostgreSQL custom-format backups", () => {
     const script = readScript("backup-postgres.sh");
     expect(script).toContain("--format=custom");

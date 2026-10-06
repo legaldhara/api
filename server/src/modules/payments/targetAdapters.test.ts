@@ -2,10 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createPaymentTargetAdapter } from "./targetAdapters";
 
 describe("payment target adapters", () => {
-  it("does not regress a completed application", async () => {
+  it("fulfils an application charge through its linked case requirement", async () => {
     const repository = {
-      advanceApplication: vi.fn(async () => false),
-      advanceCertificate: vi.fn(async () => false),
+      fulfilCasePayment: vi.fn(async () => undefined),
       activatePlan: vi.fn(async () => undefined),
     };
     const adapter = createPaymentTargetAdapter(repository);
@@ -32,8 +31,6 @@ describe("payment target adapters", () => {
       updatedAt: new Date(),
     }, "attempt-1", {});
 
-    expect(repository.advanceApplication).toHaveBeenCalledWith(expect.objectContaining({
-      allowedCurrentStatuses: ["AWAITING_ACTION", "PAYMENT_REQUIRED", "PAYMENT_DONE", "DATA_REQUIRED", "UNDER_REVIEW"],
-    }), {});
+    expect(repository.fulfilCasePayment).toHaveBeenCalledWith({ chargeId: "charge-1", attemptId: "attempt-1" }, {});
   });
 });

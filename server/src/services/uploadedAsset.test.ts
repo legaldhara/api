@@ -54,7 +54,7 @@ describe("uploaded asset authorization", () => {
       context: "DOCUMENT",
       referenceId: "document-1",
     }, { repository, now: () => new Date("2026-09-26T10:00:00.000Z") }))
-      .rejects.toMatchObject({ statusCode: 403 });
+      .rejects.toMatchObject({ statusCode: 403, code: "ASSET_NOT_OWNED" });
   });
 
   it("claims an owner's temporary asset for one domain record", async () => {
