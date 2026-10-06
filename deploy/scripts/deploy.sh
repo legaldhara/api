@@ -11,6 +11,9 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/deploy/compose.production.yml"
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/deploy/.env.production}"
 [[ -f "$ENV_FILE" ]] || { echo "Missing production environment file: $ENV_FILE" >&2; exit 4; }
+BACKUP_DIR="${DEPLOY_BACKUP_DIR:-${BACKUP_DIR:-$HOME/backups/legaldhara}}"
+[[ "$BACKUP_DIR" == /* ]] || { echo "Backup directory must be an absolute path: $BACKUP_DIR" >&2; exit 5; }
+export BACKUP_DIR
 
 compose() {
   ENV_FILE="$ENV_FILE" docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
