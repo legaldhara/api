@@ -85,9 +85,21 @@ deploy/scripts/verify-backup.sh /absolute/path/to/backup.dump
 
 Inspect timer state with `systemctl status legaldhara-backup.timer`. Validate Caddy changes before reload with `caddy adapt`; deploy through the approved workflow rather than editing production configuration manually.
 
+## Group 6 Lifecycle Rollout
+
+1. Back up PostgreSQL.
+2. Deploy API image and run `prisma migrate deploy` before accepting new workflow traffic.
+3. Verify `/health`, case route authentication, and outbox worker logs.
+4. Deploy admin and run one administrator lifecycle smoke test.
+5. Deploy website and run one customer lifecycle smoke test.
+6. Roll back frontend builds first if a UI-only issue occurs.
+7. Keep traffic paused while validating the destructive cleanup migration.
+8. If validation fails before traffic resumes, restore the database backup and previous API/frontend images together.
+9. After traffic resumes, roll forward with a corrected Group 6 API image; do not run the pre-Group 6 API against the cleaned schema.
+
 ## Rollback
 
-Re-run the production workflow with the previous known-good full commit SHA. The deployment script keeps SHA-tagged images and restores the prior API image if the new health check fails. Do not reverse production migrations automatically. Every migration must follow expand-and-contract compatibility so the previous API version can run during rollback.
+For releases without destructive migrations, re-run the production workflow with the previous known-good full commit SHA. The deployment script keeps SHA-tagged images and restores the prior API image if the new health check fails. Do not reverse production migrations automatically. Group 6 is the exception described above: once its cleanup migration is validated and traffic resumes, roll forward instead of starting a pre-Group 6 API against the cleaned schema.
 
 ## Cutover Verification
 
