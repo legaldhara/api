@@ -27,14 +27,12 @@ model User {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   applications    Application[]
-  updates         ApplicationUpdate[] @relation("UserUpdates")
   tokens          Token[]
   query           UserQuery[]
   paymentCharges  PaymentCharge[]
   refundRequests  PaymentRefund[]       @relation("PaymentRefundRequestedBy")
   documents       Document[]          @relation("UserDocuments")
   certificateRequests CertificateRequest[]   @relation("UserCertificateRequests")
-  certificateUpdates  CertificateUpdate[]    @relation("UserCertificateUpdates")
   userPlans           UserPlan[]           // âœ… New relation
   adminSecurity       AdminSecurity?
   uploadedAssets      UploadedAsset[]
@@ -163,7 +161,6 @@ model Application {
   ticketNo          String              @unique
   userId            String              @db.Uuid
   serviceId         String              @db.Uuid
-  applicationStatus ApplicationStatus   @default(AWAITING_ACTION)
   objectionReason   String?
   createdAt         DateTime            @default(now())
   autoCloseAt       DateTime?
@@ -173,29 +170,8 @@ model Application {
   deletedAt         DateTime?
   service           Service             @relation(fields: [serviceId], references: [id])
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  updates           ApplicationUpdate[]
   paymentCharges    PaymentCharge[]
   requestCase       RequestCase?
-}
-
-model ApplicationUpdate {
-  id                String            @id @default(uuid()) @db.Uuid
-  applicationId     String            @db.Uuid
-  updaterBy         String            @db.Uuid
-  message           String?
-  createdAt         DateTime          @default(now())
-  updateCharges     Decimal?
-  meta              Json?
-  newStatus         ApplicationStatus
-  paymentId         String?
-  prevStatus        ApplicationStatus
-  pendingPayment    Boolean           @default(false) // âœ… indicates admin requested payment
-  pendingDocs       Boolean           @default(false) // âœ… indicates user must update docs
-  type              PaymentType?
-  UpdateType        UpdateType?
-  application       Application       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  updater           User              @relation("UserUpdates", fields: [updaterBy], references: [id], onDelete: Cascade)
-  sourcePaymentCharge PaymentCharge?
 }
 
 model UserQuery {
@@ -244,8 +220,6 @@ model PaymentCharge {
   application               Application?        @relation(fields: [applicationId], references: [id], onDelete: Restrict)
   certificateRequest        CertificateRequest? @relation(fields: [certificateRequestId], references: [id], onDelete: Restrict)
   plan                      Plan?               @relation(fields: [planId], references: [id], onDelete: Restrict)
-  sourceApplicationUpdate   ApplicationUpdate?  @relation(fields: [sourceApplicationUpdateId], references: [id], onDelete: Restrict)
-  sourceCertificateUpdate   CertificateUpdate?  @relation(fields: [sourceCertificateUpdateId], references: [id], onDelete: Restrict)
   attempts                  PaymentAttempt[]    @relation("ChargeAttempts")
   paidAttempt               PaymentAttempt?     @relation("PaidAttempt", fields: [paidAttemptId], references: [id], onDelete: Restrict)
   refunds                   PaymentRefund[]
@@ -405,36 +379,11 @@ model CertificateRequest {
   userId         String                   @db.Uuid
   subject        String                   // e.g., "Need Certificate for Rent Agreement"
   description    String?                  // extra details by user
-  status         CertificateRequestStatus @default(PENDING)
-  pendingPayment Boolean                  @default(false)
-  docRequired    Boolean                  @default(false)
-  isResolved     Boolean                  @default(false)
   createdAt      DateTime                 @default(now())
-  resolvedAt     DateTime?
   deletedAt      DateTime?
   user           User                     @relation("UserCertificateRequests", fields: [userId], references: [id], onDelete: Cascade)
-  updates        CertificateUpdate[]      // All messages & admin updates
   paymentCharges PaymentCharge[]
   requestCase    RequestCase?
-}
-
-model CertificateUpdate {
-  id                    String              @id @default(uuid()) @db.Uuid
-  certificateRequestId  String              @db.Uuid
-  updatedBy             String              @db.Uuid
-  chargesRequired       Decimal?
-  message               String?
-  transactionId         String?             @unique
-  attachmentUrl         String?             // Admin can attach the certificate file
-  attachmentPublicId    String?             // For cloud storage (like Cloudinary)
-  newStatus             CertificateRequestStatus?
-  paymentId             String?
-  prevStatus            CertificateRequestStatus?
-  createdAt             DateTime            @default(now())
-  updateType            CertificateUpdateType
-  certificateRequest    CertificateRequest  @relation(fields: [certificateRequestId], references: [id], onDelete: Cascade)
-  updater               User                @relation("UserCertificateUpdates", fields: [updatedBy], references: [id], onDelete: Cascade)
-  sourcePaymentCharge   PaymentCharge?
 }
 
 model RequestCase {
@@ -663,64 +612,6 @@ enum TokenType {
   FCM
   OTHER
 }
-
-enum CertificateRequestStatus {
-  PENDING       // User requested
-  PAYMENT_REQUIRED
-  UNDER_REVIEW  // Admin reviewing
-  APPROVED      // Admin approved, waiting for upload
-  REJECTED      // Admin rejected
-  COMPLETED     // Certificate provided
-  CLOSED
-}
-
-
-
-enum CertificateUpdateType {
-  USER_MESSAGE        // User sent message or clarification
-  ADMIN_MESSAGE       // Admin replied
-  CERTIFICATE_PROVIDED // Admin uploaded certificate
-  STATUS_CHANGE        // Status updated (like approved/rejected)
-  SYSTEM_GENERATED
-  PAYMENT_FAILED
-  PAYMENT_SUCCESS
-  PAYMENT_REQUESTED
-}
-
-
-
-enum PaymentType {
-  INITIAL
-  OBJECTION
-  ADDITIONAL
-  CORRECTION
-}
-
-
-enum ApplicationStatus { 
-  AWAITING_ACTION
-  PAYMENT_REQUIRED
-  PAYMENT_DONE
-  DATA_REQUIRED
-  UNDER_REVIEW
-  APPROVED
-  REJECTED
-  COMPLETED
-  CLOSED
-}
-
-
-enum UpdateType {
-  USER_MESSAGE
-  ADMIN_MESSAGE
-  PAYMENT_SUCCESS
-  PAYMENT_FAILED
-  STATUS_CHANGE
-  DOCUMENT_UPDATED
-  PAYMENT_REQUESTED
-  SYSTEM_GENERATED
-}
-
 
 enum PaymentGateway {
   RAZORPAY

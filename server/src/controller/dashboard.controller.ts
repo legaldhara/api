@@ -103,13 +103,14 @@ export const getMonthlyUserRegistration = async (req: Request, res: Response) =>
  */
 export const getApplicationCountByStatus = async (req: Request, res: Response) => {
   try {
-    const statusCounts = await prisma.application.groupBy({
-      by: ["applicationStatus"],
-      _count: { applicationStatus: true },
+    const statusCounts = await prisma.requestCase.groupBy({
+      by: ["status"],
+      where: { applicationId: { not: null } },
+      _count: { status: true },
     });
 
     const formatted = Object.fromEntries(
-      statusCounts.map((s) => [s.applicationStatus, s._count.applicationStatus])
+      statusCounts.map((item) => [item.status, item._count.status])
     );
 
     return res.status(200).json({ success: true, data: formatted });
@@ -284,8 +285,9 @@ export const getMonthlyRevenueTrend = async (req: Request, res: Response) => {
  */
 export const getCertificateRequestStats = async (req: Request, res: Response) => {
   try {
-    const counts = await prisma.certificateRequest.groupBy({
+    const counts = await prisma.requestCase.groupBy({
       by: ["status"],
+      where: { certificateRequestId: { not: null } },
       _count: { status: true },
     });
 

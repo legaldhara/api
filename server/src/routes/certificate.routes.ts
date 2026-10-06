@@ -3,7 +3,6 @@ import {
   createCertificateRequest,
   getUserCertificateRequests,
   getAllCertificateRequests,
-  updateCertificateWithRoleBasedRules,
   getCertificateRequestByRequestNo
 } from "../controller/certificate.controller";
 import { asyncHandler } from "../utils/lib";

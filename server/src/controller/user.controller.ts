@@ -177,7 +177,6 @@ export const getUserById = async (
         _count: {
           select: {
             applications: true,
-            updates: true,
             query: true,
           },
         },
@@ -188,9 +187,18 @@ export const getUserById = async (
             ticketNo: true,
             serviceName: true,
             serviceFor: true,
-            applicationStatus: true,
             objectionReason: true,
             createdAt: true,
+            requestCase: {
+              select: {
+                status: true,
+                events: {
+                  orderBy: { createdAt: 'desc' },
+                  take: 5,
+                  select: { message: true, previousStatus: true, newStatus: true, type: true, createdAt: true },
+                },
+              },
+            },
             // only include successful payments for each application (recent ones)
             paymentCharges: {
               where: { status: 'PAID' },
@@ -204,20 +212,6 @@ export const getUserById = async (
                 purpose: true,
               },
               take: 5,
-            },
-            updates: {
-              orderBy: { createdAt: 'desc' },
-              take: 5,
-              select: {
-                message: true,
-                prevStatus: true,
-                newStatus: true,
-                paymentId: true,
-                updateCharges: true,
-                type: true,
-                createdAt: true,
-                updater: { select: { fullName: true } },
-              },
             },
           },
         },
@@ -234,21 +228,6 @@ export const getUserById = async (
             resolvedAt: true,
           },
           take: 20,
-        },
-        // Recent raw updates the user is related to (if any)
-        updates: {
-          orderBy: { createdAt: 'desc' },
-          select: {
-            applicationId: true,
-            message: true,
-            prevStatus: true,
-            newStatus: true,
-            paymentId: true,
-            updateCharges: true,
-            type: true,
-            createdAt: true,
-          },
-          take: 10,
         },
       },
     });

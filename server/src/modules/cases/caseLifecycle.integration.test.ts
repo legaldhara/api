@@ -13,6 +13,23 @@ describe.skipIf(!databaseTestsEnabled)("shared request lifecycle integration", (
     cleanup = undefined;
   });
 
+  it("removes legacy lifecycle tables and columns", async () => {
+    const tables = await prisma.$queryRaw<Array<{ application_updates: string | null; certificate_updates: string | null }>>`
+      SELECT to_regclass('"ApplicationUpdate"')::text AS application_updates,
+             to_regclass('"CertificateUpdate"')::text AS certificate_updates
+    `;
+    const columns = await prisma.$queryRaw<Array<{ column_name: string }>>`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND ((table_name = 'Application' AND column_name = 'applicationStatus')
+          OR (table_name = 'CertificateRequest' AND column_name IN ('status', 'pendingPayment', 'docRequired', 'isResolved', 'resolvedAt')))
+    `;
+
+    expect(tables[0]).toEqual({ application_updates: null, certificate_updates: null });
+    expect(columns).toEqual([]);
+  });
+
   it.each(["APPLICATION", "CERTIFICATE"] as const)("completes the %s lifecycle", async (type) => {
     const fixtures = createCaseFixtures();
     cleanup = fixtures.cleanup;

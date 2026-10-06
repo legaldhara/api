@@ -14,7 +14,7 @@ const toMinorUnits = (value: Decimal.Value): number => {
 export const applicationChargeInput = (input: {
   userId: string;
   applicationId: string;
-  sourceUpdateId: string;
+  sourceUpdateId?: string;
   servicePrice: Decimal.Value;
   governmentCharges: Decimal.Value;
   category: Extract<PaymentCategory, "INITIAL" | "OBJECTION" | "ADDITIONAL" | "CORRECTION">;
@@ -31,7 +31,7 @@ export const applicationChargeInput = (input: {
 export const certificateChargeInput = (input: {
   userId: string;
   certificateRequestId: string;
-  sourceUpdateId: string;
+  sourceUpdateId?: string;
   chargesRequired: Decimal.Value;
 }): CreateChargeInput => ({
   userId: input.userId,

@@ -3,7 +3,7 @@ import { asyncHandler } from "../utils/lib";
 import { authenticate } from "../middleware/authMiddleware";
 import { authorize } from "../middleware/authorize";
 import { requireAdminMfa } from "../middleware/requireAdminMfa";
-import { createApplication, deleteApplication, getAllApplications, getApplicationById, getUserApplications, createApplicationUpdate } from "../controller/application.controller";
+import { createApplication, deleteApplication, getAllApplications, getApplicationById, getUserApplications } from "../controller/application.controller";
 import { legacyApplicationMessage } from "../modules/cases/case.controller";
 import { messageSchema } from "../modules/cases/schemas";
 

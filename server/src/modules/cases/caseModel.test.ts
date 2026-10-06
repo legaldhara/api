@@ -34,4 +34,14 @@ describe("shared request lifecycle schema", () => {
   it("provides a dedicated uploaded-asset context for cases", () => {
     expect(schema).toMatch(/enum AssetContext \{[\s\S]*\bCASE\b/);
   });
+
+  it("removes duplicate lifecycle storage", () => {
+    expect(schema).not.toContain("model ApplicationUpdate {");
+    expect(schema).not.toContain("model CertificateUpdate {");
+    expect(schema).not.toContain("applicationStatus ApplicationStatus");
+    expect(schema).not.toContain("status         CertificateRequestStatus");
+    expect(schema).not.toContain("pendingPayment Boolean");
+    expect(schema).not.toContain("pendingDocs");
+    expect(schema).not.toContain("docRequired    Boolean");
+  });
 });

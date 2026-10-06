@@ -10,14 +10,3 @@ export const createCertificateRequestSchema = z.object({
 });
 
 // ✅ Admin/User adds an update (message or certificate)
-export const createCertificateUpdateSchema = z.object({
-  certificateRequestId: z.string().uuid("Invalid request ID"),
-  message: z.string().optional(),
-  attachmentAssetId: z.string().uuid("Invalid uploaded asset ID").optional(),
-  updateType: z.enum([
-    "USER_MESSAGE",
-    "ADMIN_MESSAGE",
-    "CERTIFICATE_PROVIDED",
-    "STATUS_CHANGE",
-  ]),
-});
