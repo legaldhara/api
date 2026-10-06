@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { prisma } from "../../config/db";
+import { logger } from "../../utils/logger";
+import { getCaseUpdateEmail } from "../../utils/email";
+import { notificationForCaseEvent } from "./notificationPolicy";
+
 export type OutboxDeliveryStatus = "PENDING" | "SENT" | "FAILED";
 
 export interface CaseEmailOutboxJob {
@@ -215,8 +221,3 @@ export const stopCaseEmailOutboxJob = () => {
   outboxTimer = undefined;
   outboxRunning = false;
 };
-import { randomUUID } from "node:crypto";
-import { prisma } from "../../config/db";
-import { logger } from "../../utils/logger";
-import { getCaseUpdateEmail } from "../../utils/email";
-import { notificationForCaseEvent } from "./notificationPolicy";

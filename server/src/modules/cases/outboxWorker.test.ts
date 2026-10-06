@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { createCaseEmailOutboxWorker, type CaseEmailOutboxJob } from "./outboxWorker";
 
@@ -36,6 +37,14 @@ class MemoryOutboxRepository {
 }
 
 describe("case email outbox worker", () => {
+  it("loads through the ts-node CommonJS runtime", () => {
+    expect(() => execFileSync(
+      process.execPath,
+      ["-r", "ts-node/register", "-e", "require('./src/modules/cases/outboxWorker')"],
+      { cwd: process.cwd(), stdio: "pipe" },
+    )).not.toThrow();
+  }, 40_000);
+
   it("marks a delivered email SENT without duplicating it", async () => {
     const repository = new MemoryOutboxRepository();
     const mail = { send: vi.fn(async () => undefined) };
