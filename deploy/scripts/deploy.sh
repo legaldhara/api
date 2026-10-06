@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
 DEPLOY_SHA="${1:?Usage: deploy.sh <40-character-commit-sha>}"
 [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid commit SHA" >&2; exit 2; }
@@ -41,11 +41,15 @@ PREVIOUS_SHA="$(git rev-parse HEAD)"
 DEPLOY_PHASE="preflight"
 CADDY_WAS_RUNNING=false
 BACKUP_FILE=""
+BACKUP_RESULT_FILE=""
 
 handle_failure() {
   local exit_code=$?
   trap - ERR
   set +e
+  if [[ -n "$BACKUP_RESULT_FILE" ]]; then
+    rm -f "$BACKUP_RESULT_FILE"
+  fi
   echo "Deployment failed during phase: $DEPLOY_PHASE" >&2
   compose logs --tail 200 api caddy >&2
 
@@ -80,7 +84,11 @@ if compose ps --status running --services | grep -qx caddy; then
 fi
 DEPLOY_PHASE="traffic_paused"
 
-BACKUP_FILE="$(ENV_FILE="$ENV_FILE" "$SCRIPT_DIR/backup-postgres.sh" predeploy)"
+BACKUP_RESULT_FILE="$(mktemp)"
+ENV_FILE="$ENV_FILE" "$SCRIPT_DIR/backup-postgres.sh" predeploy > "$BACKUP_RESULT_FILE"
+BACKUP_FILE="$(tail -n 1 "$BACKUP_RESULT_FILE")"
+rm -f "$BACKUP_RESULT_FILE"
+BACKUP_RESULT_FILE=""
 "$SCRIPT_DIR/verify-backup.sh" "$BACKUP_FILE"
 
 DEPLOY_PHASE="migration_started"

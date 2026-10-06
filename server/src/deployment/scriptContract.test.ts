@@ -10,7 +10,7 @@ describe("production deployment scripts", () => {
   it("uses strict shell settings for every operation", () => {
     for (const name of scriptNames) {
       const script = readScript(name);
-      expect(script).toMatch(/^#!\/usr\/bin\/env bash\nset -Eeuo pipefail/);
+      expect(script).toMatch(/^#!\/usr\/bin\/env bash\nset -E?euo pipefail/);
     }
   });
 
@@ -54,6 +54,13 @@ describe("production deployment scripts", () => {
     expect(script).toContain("compose stop caddy");
     expect(script).toContain("http://127.0.0.1:4001/health");
     expect(script).not.toContain('export IMAGE_TAG="$PREVIOUS_SHA"');
+  });
+
+  it("does not inherit the failure handler inside backup output capture", () => {
+    const script = readScript("deploy.sh");
+    expect(script).toMatch(/^#!\/usr\/bin\/env bash\nset -euo pipefail/);
+    expect(script).not.toContain('BACKUP_FILE="$(ENV_FILE=');
+    expect(script).toContain('> "$BACKUP_RESULT_FILE"');
   });
 
   it("creates PostgreSQL custom-format backups", () => {
