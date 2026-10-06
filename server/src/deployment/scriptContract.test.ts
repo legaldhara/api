@@ -63,6 +63,13 @@ describe("production deployment scripts", () => {
     expect(script).toContain('> "$BACKUP_RESULT_FILE"');
   });
 
+  it("uses a deploy-user-owned backup directory by default", () => {
+    const script = readScript("deploy.sh");
+    expect(script).toContain("DEPLOY_BACKUP_DIR");
+    expect(script).toContain('$HOME/backups/legaldhara');
+    expect(script.indexOf("export BACKUP_DIR")).toBeLessThan(script.indexOf("backup-postgres.sh\" predeploy"));
+  });
+
   it("creates PostgreSQL custom-format backups", () => {
     const script = readScript("backup-postgres.sh");
     expect(script).toContain("--format=custom");
